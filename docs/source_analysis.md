@@ -2,6 +2,8 @@
 
 Дата анализа: 12 ноября 2026 года. Этот документ отделяет подтверждённое устройство источников от решений для нового проекта. На этапе анализа источников VPS не проверялся; последующие интеграционные испытания описываются отдельно, без публикации сведений о тестовом окружении.
 
+Дополнение по будущей установке/обновлению AWG: в официальном [amnezia-vpn/amnezia-client](https://github.com/amnezia-vpn/amnezia-client/tree/dev/client/server_scripts/awg) находится набор `Dockerfile`, `run_container.sh`, `configure_container.sh`, `start.sh` и шаблонов, используемых клиентом Amnezia. Это не подтверждённый самостоятельный универсальный установщик. [Dockerfile](https://github.com/amnezia-vpn/amnezia-client/blob/dev/client/server_scripts/awg/Dockerfile) использует базовый образ `amneziavpn/amneziawg-go`; [run_container.sh](https://github.com/amnezia-vpn/amnezia-client/blob/dev/client/server_scripts/awg/run_container.sh) требует подготовленных переменных и DNS-сети. [configure_container.sh](https://github.com/amnezia-vpn/amnezia-client/blob/dev/client/server_scripts/awg/configure_container.sh) генерирует новые ключи и перезаписывает `awg0.conf`; повторять его над существующей установкой для обновления нельзя. Перед реализацией этапа 9 требуется подтвердить полный официальный контракт и закрепить конкретный release/commit. Сторонний установщик вместо официального источника не выбран.
+
 ## 1. Изученные источники
 
 | Источник | Зафиксированное состояние | Назначение |
