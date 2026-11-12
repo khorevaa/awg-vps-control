@@ -11,10 +11,11 @@ import (
 
 // Adapter предоставляет доменные действия AWG без общего Docker API для клиента.
 type Adapter struct {
-	config   AdapterConfig // Доверенные пути режима adapter.
-	docker   *DockerClient // Ограниченные Docker-команды.
-	warp     *WarpClient   // Клиент root-границы WARP.
-	mutation chan struct{} // Последовательное выполнение мутаций.
+	config   AdapterConfig    // Доверенные пути режима adapter.
+	docker   *DockerClient    // Ограниченные Docker-команды.
+	warp     *WarpClient      // Клиент root-границы WARP.
+	mutation chan struct{}    // Последовательное выполнение мутаций.
+	profiles PeerProfileVault // Разовые профили только в памяти.
 }
 
 // forward передаёт ограниченное WARP-действие и сохраняет безопасную ошибку.
@@ -115,7 +116,7 @@ func (adapter *Adapter) Handle(ctx context.Context, request Request) Response {
 		return resultResponse(request.RequestID, nil, apiError)
 	}
 	request.Payload = payload
-	if mutationAction(request.Action) {
+	if mutationAction(request.Action) || request.Action == "peers.profile.consume" {
 		select {
 		case adapter.mutation <- struct{}{}:
 			defer func() { <-adapter.mutation }()
@@ -133,6 +134,12 @@ func (adapter *Adapter) Handle(ctx context.Context, request Request) Response {
 		data, apiError = adapter.discover(ctx)
 	case "peers":
 		data, apiError = adapter.peers(ctx, request.RequestID)
+	case "peers.catalog":
+		data, apiError = adapter.peerCatalog(ctx, request.RequestID)
+	case "peer.create", "peer.rename", "peer.revoke":
+		data, apiError = adapter.peerMutation(ctx, request)
+	case "peers.profile.consume":
+		data, apiError = adapter.peerConsume(ctx, request)
 	case "configuration":
 		data, apiError = adapter.configuration(ctx, request.RequestID)
 	case "diagnostics":

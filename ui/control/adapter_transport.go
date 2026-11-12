@@ -116,7 +116,7 @@ func exchangeLocalJSON(ctx context.Context, socketPath string, expectedUID uint3
 // Call передаёт WARP только внутренний allowlist, не предоставляя общий exec.
 func (client *WarpClient) Call(ctx context.Context, request Request) (Response, *APIError) {
 	switch request.Action {
-	case "health", "integration.get", "integration.attach", "warp.overview", "diagnostics", "policy.get", "policy.set", "repair", "warp.reconnect", "warp.setup", "logs":
+	case "health", "integration.get", "integration.attach", "peers.defaults", "warp.overview", "diagnostics", "policy.get", "policy.set", "repair", "warp.reconnect", "warp.setup", "logs":
 	default:
 		return Response{}, failure(404, "unknown_action", "Действие WARP не поддерживается.")
 	}

@@ -1,0 +1,115 @@
+### Проверки каталога и границ управления клиентами без изменения VPN.
+### Используйте приватный environment base_url, origin, access_secret из web.http.
+
+### Каталог без сессии
+# @no-cookie-jar
+GET {{base_url}}/api/v1/peers/catalog
+
+> {%
+client.test("Каталог без сессии", function () {
+    client.assert(response.status === 401, "статус ответа на запрос не 401");
+});
+%}
+
+### Профиль без сессии
+# @no-cookie-jar
+POST {{base_url}}/api/v1/peers/profile
+Origin: {{origin}}
+Content-Type: application/json
+
+{"id":"00000000000000000000000000000000"}
+
+> {%
+client.test("Профиль без сессии", function () {
+    client.assert(response.status === 401, "статус ответа на запрос не 401");
+});
+%}
+
+### Вход для проверки каталога
+# @no-cookie-jar
+POST {{base_url}}/api/v1/access
+Origin: {{origin}}
+Content-Type: application/json
+
+{"secret":"{{access_secret}}"}
+
+> {%
+client.test("Вход для клиентов", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+client.global.set("peers_cookie", response.headers.valueOf("Set-Cookie").split(";")[0]);
+client.global.set("peers_csrf", response.body.csrf_token);
+%}
+
+### Каталог native клиентов
+# @no-cookie-jar
+GET {{base_url}}/api/v1/peers/catalog
+Cookie: {{peers_cookie}}
+
+> {%
+client.test("Каталог", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+%}
+
+### Профиль без CSRF не потребляется
+# @no-cookie-jar
+POST {{base_url}}/api/v1/peers/profile
+Origin: {{origin}}
+Cookie: {{peers_cookie}}
+Content-Type: application/json
+
+{"id":"00000000000000000000000000000000"}
+
+> {%
+client.test("Профиль без CSRF", function () {
+    client.assert(response.status === 403, "статус ответа на запрос не 403");
+});
+%}
+
+### Недопустимые параметры создания отклоняются до журнала операций
+# @no-cookie-jar
+POST {{base_url}}/api/v1/operations
+Origin: {{origin}}
+Cookie: {{peers_cookie}}
+X-CSRF-Token: {{peers_csrf}}
+Content-Type: application/json
+
+{"action":"peer.create","payload":{"name":""},"idempotency_key":"peer_invalid_create"}
+
+> {%
+client.test("Параметры создания", function () {
+    client.assert(response.status === 422, "статус ответа на запрос не 422");
+});
+%}
+
+### Недопустимый ID скачивания не обращается к Adapter
+# @no-cookie-jar
+POST {{base_url}}/api/v1/peers/profile
+Origin: {{origin}}
+Cookie: {{peers_cookie}}
+X-CSRF-Token: {{peers_csrf}}
+Content-Type: application/json
+
+{"id":"invalid"}
+
+> {%
+client.test("ID профиля", function () {
+    client.assert(response.status === 422, "статус ответа на запрос не 422");
+});
+%}
+
+### Завершение временной сессии
+# @no-cookie-jar
+POST {{base_url}}/api/v1/auth/logout
+Origin: {{origin}}
+Cookie: {{peers_cookie}}
+X-CSRF-Token: {{peers_csrf}}
+
+> {%
+client.test("Завершение сессии клиентов", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+client.global.clear("peers_cookie");
+client.global.clear("peers_csrf");
+%}

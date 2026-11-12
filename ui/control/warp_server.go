@@ -215,7 +215,7 @@ func (r *WarpRuntime) dispatch(ctx context.Context, request Request) Response {
 	}
 	mutation := false
 	switch request.Action {
-	case "integration.get", "warp.overview", "diagnostics", "policy.get", "logs":
+	case "integration.get", "warp.overview", "diagnostics", "policy.get", "peers.defaults", "logs":
 	case "integration.attach", "policy.set", "repair", "warp.reconnect", "warp.setup":
 		mutation = true
 	default:
@@ -277,6 +277,8 @@ func (r *WarpRuntime) dispatch(ctx context.Context, request Request) Response {
 					data = map[string]any{"installation": value, "managed": s.Manifest != nil}
 				case "policy.get":
 					data = s.policy()
+				case "peers.defaults":
+					data = s.peersDefaults(operationCtx)
 				case "warp.overview":
 					data = s.overview(operationCtx)
 				case "diagnostics":

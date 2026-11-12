@@ -4,9 +4,11 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // installDirectory описывает фиксированный каталог runtime или состояния панели.
@@ -29,12 +32,28 @@ type installDirectory struct {
 	mode os.FileMode // Точные права каталога.
 }
 
+// installJournalCapabilities описывает поддерживаемые действия постоянного журнала.
+type installJournalCapabilities struct {
+	JournalVersion int      `json:"journal_version"` // Версия схемы постоянного журнала.
+	Actions        []string `json:"actions"`         // Полный перечень принимаемых мутаций.
+}
+
 // runInstallTools выполняет только локальные команды установки от root.
 func runInstallTools(args []string) error {
 	if os.Geteuid() != 0 || len(args) == 0 {
 		return fmt.Errorf("инструменты установки требуют root и явную команду")
 	}
 	switch args[0] {
+	case "journal-actions":
+		if len(args) != 1 {
+			return fmt.Errorf("journal-actions не принимает параметры")
+		}
+		return json.NewEncoder(os.Stdout).Encode(installJournalCapabilities{JournalVersion: 1, Actions: installJournalActions(true)})
+	case "check-control-journal":
+		if len(args) != 2 {
+			return fmt.Errorf("check-control-journal требует целевой бинарник")
+		}
+		return installCheckControlJournal(args[1])
 	case "verify-release":
 		if len(args) != 2 {
 			return fmt.Errorf("verify-release требует каталог")
@@ -99,6 +118,110 @@ func runInstallTools(args []string) error {
 	default:
 		return fmt.Errorf("неизвестная команда инструментов установки")
 	}
+}
+
+// installJournalActions возвращает действия текущего выпуска либо известного первого RC.
+func installJournalActions(peers bool) []string {
+	actions := []string{"attach", "policy.set", "repair", "warp.reconnect", "warp.setup", "awg.restart"}
+	if peers {
+		actions = append(actions, "peer.create", "peer.rename", "peer.revoke")
+	}
+	return actions
+}
+
+// installReadCheckedFile читает ограниченный обычный файл без перехода по ссылкам и изменения состояния.
+func installReadCheckedFile(path string, limit int, uid uint32, private bool) ([]byte, error) {
+	if err := installSafeAncestors(path); err != nil {
+		return nil, err
+	}
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	stat, valid := info.Sys().(*syscall.Stat_t)
+	if !valid || !info.Mode().IsRegular() || stat.Uid != uid || stat.Nlink != 1 || info.Mode().Perm()&0022 != 0 || (private && info.Mode().Perm() != 0600) || info.Size() > int64(limit) {
+		return nil, fmt.Errorf("небезопасный тип, владелец, права или размер файла проверки журнала")
+	}
+	content, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
+	if err != nil || len(content) > limit {
+		return nil, fmt.Errorf("не удалось прочитать файл в допустимых пределах")
+	}
+	return content, nil
+}
+
+// installCheckControlJournal отказывает до смены выпуска, если целевой Control не прочитает действия журнала.
+func installCheckControlJournal(target string) error {
+	content, err := installReadCheckedFile("/var/lib/awg_vps_control/control/state.json", maxJournalBytes, 10002, true)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("журнал Control недоступен для безопасной проверки совместимости")
+	}
+	binary, err := filepath.Abs(target)
+	if err != nil {
+		return fmt.Errorf("неверный путь целевого бинарника")
+	}
+	binary = filepath.Clean(binary)
+	if err := installSafeAncestors(binary); err != nil {
+		return err
+	}
+	info, err := os.Lstat(binary)
+	if err != nil {
+		return fmt.Errorf("целевой бинарник недоступен")
+	}
+	stat, valid := info.Sys().(*syscall.Stat_t)
+	if !valid || !info.Mode().IsRegular() || stat.Uid != 0 || stat.Nlink != 1 || info.Mode().Perm()&0022 != 0 || info.Mode().Perm()&0100 == 0 {
+		return fmt.Errorf("целевой бинарник должен быть обычным root-owned executable без небезопасных прав")
+	}
+	version, err := installReadCheckedFile(filepath.Join(filepath.Dir(binary), "..", "version"), 128, 0, false)
+	if err != nil {
+		return fmt.Errorf("не удалось проверить версию целевого выпуска")
+	}
+	capabilities := installJournalCapabilities{JournalVersion: 1, Actions: installJournalActions(false)}
+	if strings.TrimSpace(string(version)) != "0.1.0-rc.1" {
+		capabilities = installJournalCapabilities{}
+		code, output, commandError := warpExecute(context.Background(), []string{binary, "install-tools", "journal-actions"}, 5*time.Second, "", 4096, false)
+		if commandError != nil || code != 0 || decodeStrict([]byte(output), &capabilities) != nil || capabilities.JournalVersion != 1 || len(capabilities.Actions) == 0 || len(capabilities.Actions) > 64 {
+			return fmt.Errorf("целевой выпуск не подтвердил совместимость журнала; переключение запрещено")
+		}
+	}
+	supported := make(map[string]bool, len(capabilities.Actions))
+	for _, action := range capabilities.Actions {
+		if action == "" || supported[action] || len(action) > 64 {
+			return fmt.Errorf("неверный перечень действий целевого выпуска")
+		}
+		supported[action] = true
+	}
+	var journal Journal
+	if decodeStrict(content, &journal) != nil || journal.Version != capabilities.JournalVersion || len(journal.Operations) > maxOperations {
+		return fmt.Errorf("версия или структура журнала Control не поддерживается; переключение запрещено")
+	}
+	identifiers, keys := make(map[string]bool), make(map[string]bool)
+	for _, record := range journal.Operations {
+		if !mutationAction(record.Operation.Action) || !supported[record.Operation.Action] {
+			return fmt.Errorf("целевой выпуск не поддерживает действия сохранённого журнала Control; переключение запрещено, журнал сохранён")
+		}
+		_, createdError := time.Parse(time.RFC3339Nano, record.Operation.CreatedAt)
+		_, updatedError := time.Parse(time.RFC3339Nano, record.Operation.UpdatedAt)
+		payload, payloadError := validatePayload(record.Operation.Action, record.Payload)
+		if !operationIDPattern.MatchString(record.Operation.ID) || identifiers[record.Operation.ID] || !revisionPattern.MatchString(record.IdempotencyHash) || keys[record.IdempotencyHash] || !knownStatus(record.Operation.Status) || createdError != nil || updatedError != nil || payloadError != nil || digestText(record.Operation.Action+"\n"+string(payload)) != record.Fingerprint || len(record.Operation.Result) > maxOperationResult {
+			return fmt.Errorf("журнал Control содержит недопустимую запись; переключение запрещено")
+		}
+		if peerMutationAction(record.Operation.Action) && len(record.Operation.Result) != 0 && string(record.Operation.Result) != "null" {
+			if _, valid := checkedPeerResult(record.Operation.Action, record.Operation.Result); !valid {
+				return fmt.Errorf("журнал Control содержит недопустимый результат операции клиента; переключение запрещено")
+			}
+		}
+		identifiers[record.Operation.ID], keys[record.IdempotencyHash] = true, true
+	}
+	return nil
 }
 
 // installSSHAddress определяет адрес стороны сервера текущего SSH-сеанса либо единственный публичный IP хоста.

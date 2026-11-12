@@ -168,6 +168,9 @@ func runAdapter(args []string) error {
 	server := &AdapterServer{adapter: adapter, listener: listener, connections: make(chan struct{}, 16)}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
+	profilesDone := make(chan struct{})
+	go func() { defer close(profilesDone); adapter.profiles.Run(ctx) }()
+	defer func() { cancel(); <-profilesDone }()
 	log.Printf("Docker adapter %s запущен", version)
 	if err := server.Run(ctx); err != nil {
 		return fmt.Errorf("adapter завершён: %w", err)

@@ -189,6 +189,10 @@ func readCommand(kind, iface string) ([]string, bool) {
 		command = []string{"cat", "--", "/opt/amnezia/awg/clientsTable"}
 	case "peers":
 		command = []string{"awg", "show", iface, "dump"}
+	case "native_psk":
+		command = []string{"cat", "--", "/opt/amnezia/awg/wireguard_psk.key"}
+	case "runtime_configuration":
+		command = []string{"awg", "showconf", iface}
 	default:
 		return nil, false
 	}
@@ -201,7 +205,12 @@ func (client *DockerClient) Read(ctx context.Context, id, kind, iface string) ([
 	if !allowed || !dockerIDPattern.MatchString(id) {
 		return nil, -1, failure(422, "invalid_payload", "Чтение Docker не поддерживается.")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	return client.runExec(ctx, id, command, 12*time.Second)
+}
+
+// runExec выполняет внутренний фиксированный argv и подтверждает принадлежность и завершение exec.
+func (client *DockerClient) runExec(ctx context.Context, id string, command []string, deadline time.Duration) ([]byte, int, *APIError) {
+	ctx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
 	raw, apiError := client.request(ctx, http.MethodPost, dockerAPIPrefix+"/containers/"+id+"/exec", DockerExecRequest{AttachStdout: true, AttachStderr: true, User: "0", Cmd: command}, 4096)
 	if apiError != nil {

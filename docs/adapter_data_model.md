@@ -5,7 +5,7 @@
 | Модель | Поля и назначение |
 | --- | --- |
 | AdapterConfig | `SocketPath`, `WarpSocket`, `DockerSocket`, `StateDirectory`, `MetricsDirectory`: доверенные абсолютные пути |
-| Adapter | `config`, `docker`, `warp`, `mutation`: конфигурация, ограниченные клиенты Docker/WARP и сериализация мутаций |
+| Adapter | `config`, `docker`, `warp`, `mutation`, `profiles`: конфигурация, ограниченные клиенты Docker/WARP, сериализация мутаций и разовые профили только в памяти |
 | AdapterServer | `adapter`, `listener`, `connections`, `workers`: обработчик, Unix listener, лимит соединений, завершение goroutines |
 | DockerClient | `socketPath`, `http`: фиксированный Unix socket и HTTP-клиент без proxy/redirect |
 | WarpClient | `socketPath`: root-owned Unix socket WARP-сервиса |
@@ -17,7 +17,7 @@
 | DockerLogConfig | `Type`: имя logging driver из `HostConfig.LogConfig.Type`; ровно `none` означает явно отключённую запись журнала |
 | DockerNetworkSettings | `Networks`: имена подключённых сетей и минимальные привязки |
 | DockerNetworkBinding | `NetworkID`, `IPAddress`: подтверждённые Docker значения без env и volumes |
-| DockerExecRequest | `AttachStdout`, `AttachStderr`, `TTY`, `Privileged`, `User`, `Cmd`: фиксированный запуск чтения в существующем AWG-контейнере |
+| DockerExecRequest | `AttachStdout`, `AttachStderr`, `TTY`, `Privileged`, `User`, `Cmd`: внутренний фиксированный запуск чтения или native транзакции в существующем AWG-контейнере |
 | DockerExecStart | `Detach`, `TTY`: запуск с ограниченным выводом |
 | DockerIdentifier | `ID`: идентификатор exec, выданный Docker |
 | DockerExecStatus | `Running`, `ExitCode`, `ContainerID`: подтверждение завершения и принадлежности exec |
@@ -45,7 +45,7 @@ Adapter socket принадлежит UID10003/GID10002, mode0660, катало�
 
 ## Привилегированные действия
 
-Публичный allowlist: `health`, `overview`, `discover`, `peers`, `configuration`, `diagnostics`, `logs`, `policy.get`, `attach`, `policy.set`, `repair`, `warp.reconnect`, `warp.setup`, `awg.restart`. Parameters совпадают с `data_model.md`; произвольные `exec`, URL, file path или Docker method отсутствуют.
+Публичный allowlist: `health`, `overview`, `discover`, `peers`, `peers.catalog`, `peer.create`, `peer.rename`, `peer.revoke`, `peers.profile.consume`, `configuration`, `diagnostics`, `logs`, `policy.get`, `attach`, `policy.set`, `repair`, `warp.reconnect`, `warp.setup`, `awg.restart`. Parameters совпадают с `data_model.md` и [peer_data_model.md](peer_data_model.md); произвольные `exec`, URL, file path или Docker method отсутствуют. Разовая выдача сериализуется с мутациями Adapter и перечитывает native/runtime identity перед удалением профиля из памяти.
 
 WARP IPC: `integration.get` → `{installation:null|AdapterInstallation,managed:bool}`; `integration.attach` принимает исходный AttachRequest и повторно проверяет/pins Docker topology на root-границе. `warp.overview` возвращает `{warp,policy,egress,checks}`. Остальные передаваемые действия — `health`, `diagnostics`, `policy.get`, `policy.set`, `repair`, `warp.reconnect`, `warp.setup`, `logs` только WARP/supervisor; публичный source bridge отображается на supervisor. Root WARP не предоставляет AWG restart.
 
@@ -53,9 +53,9 @@ Manual restart адресует только pinned 64-hex container ID. До и
 
 ## Docker и ограничения
 
-Фиксированные endpoints: `_ping`, список работающих контейнеров (до 32), inspect выбранных контейнеров, exec create/start/inspect только для фиксированных AWG reads, logs выбранного pinned AWG/DNS, restart pinned AWG. Docker API paths строятся только из проверенных container/exec IDs и известных литералов; HTTP redirects/proxies запрещены.
+Фиксированные endpoints: `_ping`, список работающих контейнеров (до 32), inspect выбранных контейнеров, exec create/start/inspect для фиксированных AWG reads и native транзакций, logs выбранного pinned AWG/DNS, restart pinned AWG, PUT archive только в закрытый native staging. Tar содержит ровно `next.conf` и `next.clients`, обычные файлы root0600, каждый до 256 KiB. Docker API paths строятся только из проверенных container/exec IDs и известных литералов; HTTP redirects/proxies запрещены.
 
-Exec не использует shell: `timeout -s KILL 8` ограничивает жизнь фиксированных `awg show ...`, `test -f` и `cat -- /opt/amnezia/awg/...` команд. Docker socket cancellation сам по себе не завершает exec, поэтому обязательна утилита timeout в поддерживаемом Amnezia-контейнере. Stdout/stderr Docker multiplex проверяется и ограничивается; сырой stderr не возвращается. Inspect/list ограничены 2 MiB, exec 1 MiB, logs 512 KiB, IPC 1 MiB. HTTP dial — 2 секунды, обычное чтение — до 30 секунд, restart — до 45 секунд; общий запрос имеет deadline. Health проверяет Docker `_ping` и WARP health за 2 секунды, возвращает только status.
+Обычные reads не используют shell: `timeout -s KILL 8` ограничивает жизнь фиксированных `awg show/showconf`, `test -f` и `cat -- /opt/amnezia/awg/...` команд. Native запись использует один литеральный shell script с конечным перечнем стадий и проверенными ID/хешами в argv; пользовательские имена и содержимое передаются только файлами. Внешний timeout стадии — 35 секунд, внутренний syncconf/strip — 8 секунд, sync — 5 секунд. Docker socket cancellation сам по себе не завершает exec: при неопределённом исходе сохраняется active intent, новая запись запрещена. Stdout/stderr Docker multiplex проверяется и ограничивается; сырой stderr не возвращается. Inspect/list ограничены 2 MiB, exec 1 MiB, logs 512 KiB, IPC 1 MiB. HTTP dial — 2 секунды, обычное чтение — до 30 секунд, restart — до 45 секунд; общий запрос имеет deadline. Health проверяет Docker `_ping` и WARP health за 2 секунды, возвращает только status.
 
 При `HostConfig.LogConfig.Type=none` источник AWG/DNS возвращает успешный Logs-снимок с `available:false`, фиксированной безопасной `reason`, `lines:[]`, `truncated:false`, `source` и `observed_at`. Запрос Docker logs в этом случае не выполняется. Это штатное ограничение официальных контейнеров Amnezia, запускаемых с `--log-driver none`; [документация Docker](https://docs.docker.com/engine/logging/configure/) подтверждает отсутствие журналов у этого драйвера. Adapter не меняет драйвер и не пересоздаёт контейнер. Для успешно прочитанных Docker logs возвращается `available:true`. Отсутствующий, неизвестный или другой logging driver не подменяет ошибку Docker доступным пустым журналом: сохраняется обычный запрос и обработка его ошибок. Проксируемые legacy WARP/supervisor snapshots могут не содержать `available`/`reason`.
 

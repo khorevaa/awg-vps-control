@@ -189,6 +189,8 @@ func (a *application) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		writeJSON(writer, 200, map[string]string{"status": "ok"})
 	case path == "/api/v1/operations" && request.Method == http.MethodPost:
 		a.createOperation(writer, request)
+	case path == "/api/v1/peers/profile" && request.Method == http.MethodPost:
+		a.consumePeerProfile(writer, request)
 	case request.Method == http.MethodGet:
 		a.readAPI(writer, request)
 	default:
@@ -263,6 +265,7 @@ func (a *application) readAPI(writer http.ResponseWriter, request *http.Request)
 		"/api/v1/overview": "overview", "/api/v1/discovery": "discover", "/api/v1/peers": "peers",
 		"/api/v1/diagnostics": "diagnostics", "/api/v1/configuration": "configuration",
 		"/api/v1/policy": "policy.get", "/api/v1/operations": "operations.list",
+		"/api/v1/peers/catalog": "peers.catalog",
 	}
 	action := routes[request.URL.Path]
 	payload := json.RawMessage(`{}`)
@@ -353,6 +356,10 @@ func validateOperation(input operationRequest) error {
 		return bad
 	}
 	switch input.Action {
+	case "peer.create", "peer.rename", "peer.revoke":
+		if !validatePeerOperation(input.Action, data) {
+			return bad
+		}
 	case "attach":
 		var payload attachRequest
 		if strictJSON(data, &payload) != nil {

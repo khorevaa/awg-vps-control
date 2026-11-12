@@ -24,6 +24,33 @@
 
 Снимки и операции передаются как RawMessage согласно публичной модели. Web не создаёт собственных VPN peers, профилей или секретов WARP. IControlClient принимает context, action и JSON payload, возвращает data либо безопасную apiError.
 
+## Управление клиентами
+
+Основание новых моделей: `peer_data_model.md`. Модели Web независимы от Go-модуля Control.
+
+| Модель | Поля и назначение |
+| --- | --- |
+| peerCreateRequest | Name, EndpointHost, DNS []string, ExpectedRevision — публичные параметры создания; без ключей |
+| peerRenameRequest | PublicKey, Name, ExpectedRevision — переименование по native public key |
+| peerRevokeRequest | PublicKey, ExpectedRevision — отзыв доступа по native public key |
+| peerProfile | Filename, ContentBase64 — ограниченная разовая передача `.conf` из Control в HTTP attachment; только память |
+
+DNS принимается только по IPv4, поскольку поддерживаемый клиентский путь
+не предоставляет IPv6 DNS. Частные IPv4 адреса AmneziaDNS разрешены.
+
+`POST /api/v1/peers/profile` требует сессию, Origin и CSRF, принимает существующую
+модель operationLookup. До обращения к Control в аудит пишется только фиксированное
+имя `peer.profile.requested`. Ответ строго декодируется, размер профиля ограничен
+64 KiB, имя файла — `awg_client_<hex>.conf`. Web отдаёт файл с no-store и attachment,
+не пишет его в state/audit/logs и очищает изменяемые буферы после ответа.
+
+Frontend хранит каталог, ожидающую ревизию, состояние формы и отметку попытки
+скачивания только в памяти. Создание/переименование/отзыв используют журнал
+операций; изменение ревизии требует перечитать список и подтвердить новое действие.
+Профиль скачивается отдельной кнопкой только после успешного создания. Автоповтора
+скачивания нет; потеря ответа, истечение 10 минут или перезапуск Adapter требуют
+отзыва клиента и нового создания. В localStorage сохраняется только тема.
+
 Frontend обрабатывает дополнительное `Logs.available:false` как известное ограничение источника: выводит `reason` внутри журнала и помечает снимок недоступным, без общей ошибки страницы. Отсутствие строк при доступном источнике сохраняет отдельное сообщение «нет строк». Отсутствующее `available` поддерживает legacy WARP/supervisor; HTTP ошибки по-прежнему показываются как ошибки.
 
 Frontend читает `Overview.awg` как `{running: bool, message: string, started_at?: string}`: `running=true` означает «Работает», `false` — «Работа не подтверждена» (inspection мог завершиться ошибкой). `Overview.warp` имеет `{installed: bool, service_active: bool, connected: bool, observed_at: string}`: `installed=false` — «Не установлен»; `installed=true` и `connected=true/false` — «Подключён»/«Отключён». Отсутствующий либо неверно типизированный статус показывает «Неизвестно»; работа службы и туннеля дополнительно выводится отдельными диагностическими проверками. Единого поля `status` у этих снимков нет.

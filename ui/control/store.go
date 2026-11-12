@@ -112,6 +112,12 @@ func openStore(path string) (*Store, error) {
 		}
 		identifiers[record.Operation.ID] = true
 		keys[record.IdempotencyHash] = true
+		if peerMutationAction(record.Operation.Action) && len(record.Operation.Result) != 0 && string(record.Operation.Result) != "null" {
+			if _, valid := checkedPeerResult(record.Operation.Action, record.Operation.Result); !valid {
+				_ = lock.Close()
+				return nil, errors.New("журнал содержит недопустимый результат операции клиента")
+			}
+		}
 		if !terminalStatus(record.Operation.Status) {
 			record.Operation.Status = "manual_recovery_required"
 			record.Operation.UpdatedAt = nowText()

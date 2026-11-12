@@ -1,4 +1,4 @@
-# API первого выпуска
+# API панели
 
 Браузер → Go Web по HTTP через Unix socket и SSH-туннель. Web → Go Control → Go Docker Adapter → хостовый Go WARP agent используют отдельные Unix sockets и протокол из `data_model.md`. Первые три процесса работают в Docker; хостовый agent обслуживает только WARP, его политику, маршруты и восстановление.
 
@@ -31,11 +31,11 @@ Control допускает Web UID 10001; локальный root и собст�
 
 Read actions: `health`, `overview`, `discover`, `peers`, `diagnostics`, `configuration`, `logs`, `policy.get`, `operations.list`, `operations.get` (payload `{id}`). Мутация `operations.create` принимает OperationRequest и запускается последовательно с постоянным журналом.
 
-Разрешённые операции: `attach` (AttachRequest), `policy.set` (PolicyUpdate), `repair` (`{}`), `warp.reconnect` (`{}`), `warp.setup` (`{}`), `awg.restart` (`{}`). Перезапуск AWG — только явно созданная пользователем операция. Нет произвольного command/container/path payload.
+Разрешённые операции: `attach` (AttachRequest), `policy.set` (PolicyUpdate), `repair` (`{}`), `warp.reconnect` (`{}`), `warp.setup` (`{}`), `awg.restart` (`{}`), а в `0.2.0-dev.1` также `peer.create`, `peer.rename`, `peer.revoke` (см. ниже). Перезапуск AWG — только явно созданная пользователем операция. Нет произвольного command/container/path payload.
 
 ## Docker Adapter и WARP agent
 
-Adapter — отдельный процесс существующего бинарника `ui/control`: `awg_control adapter serve` и `awg_control adapter healthcheck`. Read actions совпадают с Control, кроме `operations.*`. Control отправляет операцию в Adapter под её именем и получает финальный результат; журнал и HTTP polling остаются в Control. Adapter читает AWG через Docker Engine API, выполняет фиксированные команды внутри закреплённого контейнера и допускает только явный `awg.restart`. Произвольные Docker API paths, команды exec и host paths из пользовательского payload запрещены. Сырые конфиги, ключи и stdout/stderr не передаются клиенту.
+Adapter — отдельный процесс существующего бинарника `ui/control`: `awg_control adapter serve` и `awg_control adapter healthcheck`. Read actions совпадают с Control, кроме `operations.*`. Control отправляет операцию в Adapter под её именем и получает финальный результат; журнал и HTTP polling остаются в Control. Adapter читает AWG через Docker Engine API и выполняет фиксированные доменные команды внутри закреплённого контейнера. Клиентские операции применяют `syncconf`, `awg.restart` остаётся отдельным ручным действием. Произвольные Docker API paths, команды exec и host paths из пользовательского payload запрещены. Сырые конфиги и stdout/stderr не передаются клиенту; секретный клиентский профиль выдаётся только отдельным защищённым маршрутом.
 
 WARP agent запускается тем же бинарником: `awg_control warp serve`; IPC и supervisor работают в одном процессе. Режимы `warp guard`, `warp check-config`, `warp request <JSON>` и `warp probe-dns` обслуживают boot guard, проверку конфигурации, локальные команды и сетевой probe. Конфигурация `/etc/awg_vps_control/host.json` и существующий host state сохраняются. Legacy `control_uid` не предоставляет доступ к новому socket; разрешённый `adapter_uid` — 10003. Сетевые действия сериализуются с supervisor; автопроцессы не вызывают `awg.restart`. `warp.setup` может занимать до 180 секунд; остальные операции ограничены 90 секундами, чтение — 30 секундами.
 
@@ -60,3 +60,37 @@ Root CLI направляет AWG reads/attach в Adapter, команды WARP �
 - WARP env: `AWG_WARP_CONFIG`, `AWG_WARP_SOCKET`.
 
 Точная публичная API-форма сохраняется при изменении внутренних функций. Runtime данные тестового VPS не сохраняются в репозитории.
+
+## Управление клиентами Amnezia
+
+Контракт следующего этапа описан в `peer_data_model.md`. Старый массив
+`GET /api/v1/peers` сохраняется. `GET /api/v1/peers/catalog` возвращает
+`{revision,can_manage,reason,peers,defaults}`; defaults содержит входящий адрес VPS,
+DNS, UDP-порт и зарезервированные адреса. `can_manage:false` оставляет просмотр.
+
+Через существующий `POST /api/v1/operations` доступны действия:
+
+| Action | Payload |
+| --- | --- |
+| `peer.create` | `{name,endpoint_host,dns:["<IP>"],expected_revision}` |
+| `peer.rename` | `{public_key,name,expected_revision}` |
+| `peer.revoke` | `{public_key,expected_revision}` |
+
+Имя — 1–80 Unicode-символов без управляющих и format-символов, без крайних
+пробелов. Endpoint — канонический IP либо ASCII DNS-имя без URL/порта;
+DNS — один или два разных канонических IPv4. Публичный ключ — 32 байта Base64.
+Ревизия связывает оба native файла и установку. При конфликте операция не
+повторяется автоматически: перечитайте каталог, затем подтвердите новое действие.
+
+Успешное создание возвращает в результате операции только публичные поля,
+`profile_available:true` и `profile_expires_at`. Для получения файла выполните
+`POST /api/v1/peers/profile` с `{id:"<ID успешной peer.create>"}` и CSRF.
+Control проверяет журнал и передаёт `peers.profile.consume` в Adapter. HTTP 200
+содержит `.conf` как `application/octet-stream`, `Content-Disposition: attachment`
+и `Cache-Control: no-store`. В локальном IPC только этот ответ содержит
+`{filename,content_base64}`, которое Web строго проверяет и декодирует.
+
+Профиль доступен для одной выдачи в течение 10 минут, хранится только в памяти
+Adapter и удаляется до отправки. Повторная выдача, истечение срока, отзыв клиента
+или перезапуск Adapter возвращают 410. Если файл не сохранился, отзовите доступ
+и создайте клиента заново. Ключи не передаются через журнал операций или аудит.

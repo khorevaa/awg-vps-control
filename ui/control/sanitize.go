@@ -104,6 +104,20 @@ func sanitizeError(apiError *APIError) *APIError {
 		message = "Изменение не прошло проверку и было отменено хостовым мостом."
 	case "rollback_failed":
 		message = "Не удалось подтвердить восстановление. Требуется ручная диагностика."
+	case "invalid_peer":
+		message = "Проверьте имя клиента, адрес сервера, DNS и актуальность списка клиентов."
+	case "peer_not_found":
+		message = "Клиент уже отсутствует. Обновите список клиентов."
+	case "peer_conflict":
+		message = "Данные клиента конфликтуют с текущей установкой. Обновите список."
+	case "peer_capacity":
+		message = "В клиентской подсети нет свободного адреса."
+	case "profile_capacity":
+		message = "Слишком много профилей ожидают скачивания. Скачайте их или дождитесь истечения срока."
+	case "profile_unavailable":
+		message = "Профиль уже выдан, просрочен или потерян при перезапуске. Отзовите доступ и создайте клиента заново."
+	case "native_recovery_required":
+		message = "Предыдущее изменение клиентов не завершено. Требуется ручная проверка native файлов перед новой записью."
 	}
 	return failure(status, code, message)
 }

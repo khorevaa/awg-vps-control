@@ -56,7 +56,19 @@
         </section>
 
         <section data-panel="peers" hidden>
-          <article class="card"><div class="card-heading"><h2>Клиенты AWG <span id="peers-count" class="count">0</span></h2><input id="peer-search" class="search" type="search" placeholder="Имя, IP или публичный ключ" aria-label="Поиск клиентов"></div><p class="muted">Список читается из Amnezia. Отсутствие свежего handshake само по себе не означает неисправность клиента.</p><div class="table-scroll"><table><thead><tr><th>Клиент / публичный ключ</th><th>Адреса</th><th>Endpoint</th><th>Последний handshake</th><th>Получено / отправлено</th></tr></thead><tbody id="peers-body"></tbody></table></div><p id="peers-empty" class="empty" hidden>Клиенты не найдены.</p><div class="pagination"><button id="peers-prev" class="button small-button">← Назад</button><span id="peers-page" class="muted">1 / 1</span><button id="peers-next" class="button small-button">Далее →</button></div><p class="footnote">В этом выпуске доступен просмотр. Создание, переименование и отзыв появятся отдельным этапом.</p></article>
+          <div id="peer-management-notice" class="notice warning" role="status" hidden></div>
+          <article class="card">
+            <div class="card-heading"><h2>Новый клиент</h2><span class="pill neutral">Профиль выдаётся один раз</span></div>
+            <form id="peer-create-form">
+              <fieldset id="peer-create-fields" disabled>
+                <div class="peer-form-grid"><div><label for="peer-name">Имя клиента</label><input id="peer-name" name="name" type="text" maxlength="160" placeholder="Например, ноутбук" required autocomplete="off"></div><div><label for="peer-endpoint">Адрес VPS для подключения</label><input id="peer-endpoint" name="endpoint" type="text" maxlength="253" placeholder="IP или имя сервера, без порта" required spellcheck="false" autocomplete="off"><small id="peer-endpoint-hint" class="muted">Входящий адрес сервера, к которому подключается Amnezia.</small></div></div>
+                <details class="peer-advanced"><summary>DNS в профиле клиента</summary><label for="peer-dns">Один или два IPv4-адреса DNS через запятую</label><input id="peer-dns" name="dns" type="text" maxlength="100" required spellcheck="false" autocomplete="off"><p class="footnote">При наличии AmneziaDNS предлагается его адрес. Клиентский путь поддерживает DNS по IPv4.</p></details>
+                <p class="footnote">После создания скачайте .conf в течение 10 минут и сохраните его самостоятельно. Для существующих клиентов профиль восстановить нельзя.</p>
+                <div class="form-actions"><button id="peer-create-submit" class="button primary" type="submit">Создать клиента…</button></div>
+              </fieldset>
+            </form>
+          </article>
+          <article class="card"><div class="card-heading"><h2>Клиенты AWG <span id="peers-count" class="count">0</span></h2><input id="peer-search" class="search" type="search" placeholder="Имя, IP или публичный ключ" aria-label="Поиск клиентов"></div><p class="muted">Панель и Amnezia используют общий список. Изменяйте клиентов в этих интерфейсах по очереди. Отсутствие свежего handshake само по себе не означает неисправность.</p><div class="table-scroll"><table><thead><tr><th>Клиент / публичный ключ</th><th>Адреса</th><th>Endpoint</th><th>Последний handshake</th><th>Получено / отправлено</th><th>Действия</th></tr></thead><tbody id="peers-body"></tbody></table></div><p id="peers-empty" class="empty" hidden>Клиенты не найдены.</p><div class="pagination"><button id="peers-prev" class="button small-button">← Назад</button><span id="peers-page" class="muted">1 / 1</span><button id="peers-next" class="button small-button">Далее →</button></div></article>
         </section>
 
         <section data-panel="warp" hidden>
@@ -72,7 +84,7 @@
         <section data-panel="operations" hidden>
           <div id="operation-uncertain" class="notice warning" hidden><span id="operation-uncertain-message"></span><button id="retry-operation" class="button small-button">Повторить с тем же ключом</button></div>
           <article class="card"><div class="card-heading"><h2>История операций</h2><span id="operations-updated" class="muted">Нет снимка</span></div><p class="muted">Принятый запрос ещё не означает успешное изменение. Итог появляется после проверки Control.</p><div class="table-scroll"><table><thead><tr><th>Действие</th><th>Состояние</th><th>Создана</th><th>Обновлена</th><th></th></tr></thead><tbody id="operations-body"></tbody></table></div><p id="operations-empty" class="empty">Операций пока нет.</p></article>
-          <article id="operation-details-card" class="card" hidden><div class="card-heading"><h2>Подробности операции</h2><span id="operation-status" class="pill neutral"></span></div><p id="operation-identity" class="footnote mono"></p><pre id="operation-result" class="code-view"></pre></article>
+          <article id="operation-details-card" class="card" hidden><div class="card-heading"><h2>Подробности операции</h2><span id="operation-status" class="pill neutral"></span></div><p id="operation-identity" class="footnote mono"></p><div id="peer-profile-card" class="notice profile-notice" hidden><strong>Профиль нового клиента</strong><p id="peer-profile-message"></p><button id="peer-profile-download" class="button primary" type="button">Скачать .conf один раз</button><a href="#peers" class="text-button">К списку клиентов →</a></div><pre id="operation-result" class="code-view"></pre></article>
         </section>
 
         <section data-panel="logs" hidden>
@@ -83,6 +95,7 @@
     </div>
   </div>
   <dialog id="confirmation"><form method="dialog"><p class="eyebrow">ПОДТВЕРЖДЕНИЕ</p><h2 id="confirmation-title"></h2><p id="confirmation-message"></p><div class="form-actions"><button class="button" value="cancel">Отмена</button><button id="confirmation-submit" class="button primary" value="confirm">Продолжить</button></div></form></dialog>
+  <dialog id="peer-rename-dialog"><form id="peer-rename-form"><p class="eyebrow">КЛИЕНТ AWG</p><h2>Переименовать клиента</h2><label for="peer-rename-name">Имя клиента</label><input id="peer-rename-name" type="text" maxlength="160" required autocomplete="off"><p class="footnote">Подключение и сохранённый профиль продолжат работать.</p><div class="form-actions"><button id="peer-rename-cancel" class="button" type="button">Отмена</button><button class="button primary" type="submit">Сохранить имя</button></div></form></dialog>
   <div id="toasts" class="toasts" aria-live="polite"></div>
 </body>
 </html>

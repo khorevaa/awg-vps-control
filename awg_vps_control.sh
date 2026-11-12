@@ -59,7 +59,7 @@ confirm() {
 # Локальный bundle выбирается явно; remote-код всегда берётся из опубликованного release archive.
 install_bundle() (
     require_root
-    local action=$1 source=${2:-} temporary='' bundle
+    local action=$1 source=${2:-} temporary='' bundle current
     [[ -n $source ]] || prompt_value source 'Каталог собранного выпуска или тег GitHub release' "${AWG_UI_VERSION:-latest}" required
     if [[ -d $source ]]; then bundle=$(CDPATH= cd -- "$source" && pwd -P)
     else
@@ -72,7 +72,14 @@ install_bundle() (
     fi
     [[ -f $bundle/install.sh && ! -L $bundle/install.sh && -f $bundle/manifest.sha256 && -f $bundle/bin/awg_control && -f $bundle/bin/awg_web ]] || die 'Каталог не содержит полный release bundle. Сначала соберите выпуск scripts/build_release.sh или scripts/build_release.ps1.'
     printf '%s%s: установка проверенного выпуска из %s%s\n' "$blue" "$action" "$bundle" "$plain"
-    bash "$bundle/install.sh" "$bundle"
+    if [[ -L /opt/awg_vps_control/current ]]; then
+        current=$(readlink -f /opt/awg_vps_control/current)
+        [[ $current == /opt/awg_vps_control/releases/* && -f $current/bin/awg_control ]] || die 'Некорректный путь установленного выпуска.'
+        # Текущий backend проверяет совместимость и запускает актуальную lifecycle-логику.
+        bash "$current/scripts/awg_vps_control.sh" update-ui "$bundle"
+    else
+        bash "$bundle/install.sh" "$bundle"
+    fi
 )
 
 install_ui() {

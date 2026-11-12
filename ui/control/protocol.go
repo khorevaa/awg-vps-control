@@ -133,8 +133,10 @@ func validatePayload(action string, payload json.RawMessage) (json.RawMessage, *
 		return nil, apiError
 	}
 	switch action {
-	case "health", "overview", "discover", "peers", "diagnostics", "configuration", "policy.get", "operations.list", "repair", "warp.reconnect", "warp.setup", "awg.restart":
+	case "health", "overview", "discover", "peers", "peers.catalog", "diagnostics", "configuration", "policy.get", "operations.list", "repair", "warp.reconnect", "warp.setup", "awg.restart":
 		return canonical, requireEmpty(canonical)
+	case "peer.create", "peer.rename", "peer.revoke":
+		return canonical, validatePeerPayload(action, canonical)
 	case "logs":
 		var value LogRequest
 		if decodeStrict(canonical, &value) != nil || value.Limit < 1 || value.Limit > 200 {
@@ -154,7 +156,7 @@ func validatePayload(action string, payload json.RawMessage) (json.RawMessage, *
 		if decodeStrict(canonical, &value) == nil && value.WarpEnabled != nil && value.AllowDirectWithoutWARP != nil && revisionPattern.MatchString(value.ExpectedRevision) {
 			return canonical, nil
 		}
-	case "operations.get":
+	case "operations.get", "peers.profile.consume":
 		var value OperationLookup
 		if decodeStrict(canonical, &value) == nil && operationIDPattern.MatchString(value.ID) {
 			return canonical, nil
@@ -177,7 +179,7 @@ func encodeData(value any) json.RawMessage {
 // mutationAction определяет конечный перечень привилегированных изменений.
 func mutationAction(action string) bool {
 	switch action {
-	case "attach", "policy.set", "repair", "warp.reconnect", "warp.setup", "awg.restart":
+	case "attach", "policy.set", "repair", "warp.reconnect", "warp.setup", "awg.restart", "peer.create", "peer.rename", "peer.revoke":
 		return true
 	default:
 		return false

@@ -9,6 +9,8 @@ done
 docker compose version >/dev/null
 docker info >/dev/null
 source_dir=$(cd -- "${1:-$(dirname -- "${BASH_SOURCE[0]}")}" && pwd -P)
+installer_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+journal_checker="$installer_dir/bin/awg_control"
 [[ -f $source_dir/manifest.sha256 && -f $source_dir/bin/awg_web && -f $source_dir/bin/awg_control ]] || {
     echo 'Build a release with scripts/build_release.sh or scripts/build_release.ps1 first.' >&2
     exit 1
@@ -24,6 +26,11 @@ root=/opt/awg_vps_control
 release="$root/releases/$tag"
 exec 9>/run/awg_vps_install.lock
 flock -n 9 || { echo 'Another lifecycle operation is running.' >&2; exit 1; }
+previous=''
+if [[ -L $root/current ]]; then previous=$(readlink -f "$root/current");
+elif [[ -e $root/current ]]; then echo 'Current release path must be a symlink.' >&2; exit 1; fi
+if [[ -n $previous && $previous != "$root/releases/"* ]]; then echo 'Unsafe current release link.' >&2; exit 1; fi
+"$journal_checker" install-tools check-control-journal "$source_dir/bin/awg_control"
 for directory in "$root" /etc/awg_vps_control /var/lib/awg_vps_control; do
     [[ ! -L $directory ]] || { echo 'Unsafe installation path.' >&2; exit 1; }
     install -d -o root -g root -m 0700 "$directory"
@@ -47,16 +54,24 @@ for component in web control; do
         --build-arg "VERSION=$version" --build-arg "REVISION=$revision" \
         -t "awg_vps_$component:$tag" "$release"
 done
-previous=''
-if [[ -L $root/current ]]; then previous=$(readlink -f "$root/current");
-elif [[ -e $root/current ]]; then echo 'Current release path must be a symlink.' >&2; exit 1; fi
-if [[ -n $previous && $previous != "$root/releases/"* ]]; then echo 'Unsafe current release link.' >&2; exit 1; fi
-
 rollback_install() {
     result=$?
     trap - ERR
     if [[ -n $previous ]]; then
-        "$release/scripts/awg_vps_control.sh" stop-ui || true
+        if ! "$journal_checker" install-tools check-control-journal "$previous/bin/awg_control"; then
+            echo 'Panel update failed; previous release cannot read the current journal. Current release retained; manual recovery required.' >&2
+            exit "$result"
+        fi
+        if ! "$release/scripts/awg_vps_control.sh" stop-ui; then
+            "$release/scripts/awg_vps_control.sh" start-ui || true
+            echo 'Cannot stop journal writers for automatic recovery; current release retained. Manual recovery required.' >&2
+            exit "$result"
+        fi
+        if ! "$journal_checker" install-tools check-control-journal "$previous/bin/awg_control"; then
+            "$release/scripts/awg_vps_control.sh" start-ui || true
+            echo 'Journal changed before automatic recovery; current release retained. Manual recovery required.' >&2
+            exit "$result"
+        fi
         systemctl stop awg_vps_warp.service || true
         ln -sfn "$previous" "$root/current.next"
         mv -Tf "$root/current.next" "$root/current"
@@ -91,6 +106,20 @@ rollback_install() {
     fi
     exit "$result"
 }
+
+# Сначала закрываем приём новых операций и writer, затем повторяем preflight перед сменой runtime.
+if [[ -n $previous && -f $previous/runtime.env && -f $previous/systemd/awg_vps_warp.service ]]; then
+    if ! docker compose --env-file /etc/awg_vps_control/ui.env --env-file "$previous/runtime.env" -f "$previous/compose.yaml" stop web control; then
+        "$previous/scripts/awg_vps_control.sh" start-ui || true
+        echo 'Cannot stop journal writers safely; release was not switched.' >&2
+        exit 1
+    fi
+    if ! "$journal_checker" install-tools check-control-journal "$release/bin/awg_control"; then
+        "$previous/scripts/awg_vps_control.sh" start-ui
+        echo 'Journal changed before update; previous release retained.' >&2
+        exit 1
+    fi
+fi
 trap rollback_install ERR
 
 # Миграция старого прототипа останавливает только наши процессы; guard и Docker не перезапускаются.

@@ -69,6 +69,11 @@ case $command in
     rotate-ui-access) "$release/bin/awg_control" install-tools rotate-secret ;;
     install-ui|update-ui)
         [[ $# -eq 2 ]] || { echo 'Usage: awg-vps-control update-ui <release-directory>' >&2; exit 2; }
+        "$release/bin/awg_control" install-tools verify-release "$2"
+        "$release/bin/awg_control" install-tools check-control-journal "$2/bin/awg_control"
+        if [[ $(tr -d '\r\n' < "$2/version") == 0.1.0-rc.1 ]]; then
+            exec bash "$release/install.sh" "$2"
+        fi
         exec bash "$2/install.sh" "$2"
         ;;
     rollback-ui)
@@ -78,6 +83,18 @@ case $command in
         [[ $previous == "$root/releases/"* && -d $previous && $previous != "$release" ]] || { echo 'Предыдущий выпуск отсутствует.' >&2; exit 1; }
         [[ -f $previous/systemd/awg_vps_warp.service ]] || { echo 'Для старой архитектуры нужна отдельная миграция; автоматический откат недоступен.' >&2; exit 1; }
         (cd "$previous" && sha256sum --check --status manifest.sha256)
+        "$release/bin/awg_control" install-tools check-control-journal "$previous/bin/awg_control"
+        # Повторная проверка после остановки writers закрывает гонку с новой операцией UI.
+        if ! compose stop web control; then
+            "$release/scripts/awg_vps_control.sh" start-ui || true
+            echo 'Не удалось безопасно остановить writer журнала; выпуск не переключён.' >&2
+            exit 1
+        fi
+        if ! "$release/bin/awg_control" install-tools check-control-journal "$previous/bin/awg_control"; then
+            "$release/scripts/awg_vps_control.sh" start-ui
+            echo 'Журнал изменился перед откатом; исходный выпуск сохранён.' >&2
+            exit 1
+        fi
         recover_rollback() {
             result=$?
             trap - ERR
@@ -89,7 +106,13 @@ case $command in
             systemctl daemon-reload
             systemctl restart awg_vps_warp.service || true
             "$release/scripts/awg_vps_control.sh" start-ui || true
-            echo 'Откат не прошёл проверку; выбран исходный выпуск. Проверьте healthcheck.' >&2
+            restored=0
+            for attempt in $(seq 1 30); do
+                if "$release/scripts/awg_vps_control.sh" healthcheck >/dev/null 2>&1; then restored=1; break; fi
+                sleep 1
+            done
+            if [[ $restored -eq 1 ]]; then echo 'Откат не прошёл проверку; исходный выпуск восстановлен, готовность подтверждена.' >&2
+            else echo 'Откат не прошёл проверку; выбран исходный выпуск, но службы требуют ручного восстановления.' >&2; fi
             exit "$result"
         }
         trap recover_rollback ERR

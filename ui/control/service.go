@@ -55,7 +55,9 @@ func (service *Service) Handle(ctx context.Context, request Request) Response {
 		}
 		operation, lookupError := service.store.Lookup(lookup.ID)
 		return resultResponse(request.RequestID, encodeData(operation), lookupError)
-	case "overview", "discover", "peers", "diagnostics", "configuration", "logs", "policy.get":
+	case "peers.profile.consume":
+		return service.consumePeerProfile(ctx, request)
+	case "overview", "discover", "peers", "peers.catalog", "diagnostics", "configuration", "logs", "policy.get":
 		response, hostError, _ := service.host.Call(ctx, request)
 		if hostError != nil {
 			return resultResponse(request.RequestID, nil, hostError)
@@ -106,7 +108,7 @@ func (service *Service) createOperation(request Request) Response {
 // safeHostRejection распознаёт только известные отказы до изменения установки.
 func safeHostRejection(code string) bool {
 	switch code {
-	case "invalid_request", "invalid_payload", "not_attached", "unsupported", "unsupported_topology", "capability_unavailable", "revision_conflict", "policy_conflict", "configuration_changed", "lock_busy", "busy":
+	case "invalid_request", "invalid_payload", "invalid_peer", "not_attached", "unsupported", "unsupported_topology", "capability_unavailable", "revision_conflict", "policy_conflict", "configuration_changed", "lock_busy", "busy", "peer_not_found", "peer_conflict", "peer_capacity", "profile_capacity":
 		return true
 	default:
 		return false
@@ -127,6 +129,10 @@ func (service *Service) execute(ctx context.Context, record OperationRecord) {
 		return
 	}
 	if !response.OK {
+		if peerMutationAction(record.Operation.Action) {
+			// Ошибка peer не имеет документированного результата для постоянного хранения.
+			response.Data = nil
+		}
 		status := "manual_recovery_required"
 		if safeHostRejection(response.Error.Code) {
 			status = "failed"
@@ -140,6 +146,14 @@ func (service *Service) execute(ctx context.Context, record OperationRecord) {
 		service.store.Update(record.Operation.ID, status, operationResult(response.Data), response.Error)
 		log.Printf("операция %s %s: %s", record.Operation.ID, record.Operation.Action, status)
 		return
+	}
+	if peerMutationAction(record.Operation.Action) {
+		checked, valid := checkedPeerResult(record.Operation.Action, response.Data)
+		if !valid {
+			service.store.Update(record.Operation.ID, "manual_recovery_required", nil, failure(502, "invalid_peer_result", "Изменение клиента не подтверждено корректным результатом. Обновите список и проверьте установку."))
+			return
+		}
+		response.Data = checked
 	}
 	if !service.store.Update(record.Operation.ID, "verifying", nil, nil) {
 		return

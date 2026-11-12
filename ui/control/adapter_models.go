@@ -60,14 +60,14 @@ type DockerNetworkBinding struct {
 	IPAddress string `json:"IPAddress"` // Текущий IPv4 адрес контейнера.
 }
 
-// DockerExecRequest описывает исключительно фиксированную read-команду.
+// DockerExecRequest описывает внутренний фиксированный argv чтения либо native транзакции.
 type DockerExecRequest struct {
 	AttachStdout bool     `json:"AttachStdout"` // Чтение ограниченного stdout.
 	AttachStderr bool     `json:"AttachStderr"` // Получение stderr без выдачи сырых ошибок.
 	TTY          bool     `json:"Tty"`          // Всегда false для строгого multiplex.
 	Privileged   bool     `json:"Privileged"`   // Всегда false, привилегии не повышаются.
 	User         string   `json:"User"`         // Root существующего AWG-контейнера.
-	Cmd          []string `json:"Cmd"`          // Фиксированный argv без shell.
+	Cmd          []string `json:"Cmd"`          // Фиксированный argv; transaction shell никогда не содержит клиентских значений.
 }
 
 // DockerExecStart запускает созданную фиксированную команду.
