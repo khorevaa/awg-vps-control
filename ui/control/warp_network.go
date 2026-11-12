@@ -18,6 +18,10 @@ func (s *WarpSession) guard(ctx context.Context, path string) {
 	if s.Err != nil {
 		return
 	}
+	if path != "blocked" && s.Runtime.safetyHeld() {
+		s.fail("emergency_hold", "Аварийная блокировка запрещает открывать клиентский выход.", 409)
+		return
+	}
 	m := s.Manifest
 	if m == nil || !m.valid() || (path != "blocked" && path != "direct" && path != "warp") {
 		s.fail("invalid_state", "Нет доверенного manifest защитных ресурсов.", 409)
@@ -83,7 +87,7 @@ func (s *WarpSession) ensureRule(ctx context.Context, family, priority int, args
 	desired := strings.Join(args, " ")
 	current = strings.TrimSpace(current)
 	if current != "" {
-		if warpString(expected[key]) != desired || warpString(observed[key]) != current {
+		if warpString(expected[key]) != desired || warpRuleIdentity(warpString(observed[key])) != warpRuleIdentity(current) {
 			s.fail("configuration_changed", "Приоритет собственного маршрута изменён извне.", 409)
 		}
 		return
@@ -93,6 +97,11 @@ func (s *WarpSession) ensureRule(ctx context.Context, family, priority int, args
 	s.write("rule_manifest.json", expected)
 	observed[key] = strings.TrimSpace(s.command(ctx, "ip", "-"+strconv.Itoa(family), "rule", "show", "pref", strconv.Itoa(priority)))
 	s.write("rule_observed.json", observed)
+}
+
+// warpRuleIdentity исключает только отметку ядра об отсутствующем интерфейсе, сохраняя селекторы правила.
+func warpRuleIdentity(rule string) string {
+	return strings.ReplaceAll(rule, " [detached]", "")
 }
 
 // networkCommand выбирает host либо прикреплённый namespace, не вызывая shell.
@@ -213,19 +222,24 @@ func (s *WarpSession) prepareAdmin(ctx context.Context) {
 	}
 	s.ensureJump(ctx, "mangle", "OUTPUT", "AVPS_OUTPUT", false, false)
 	s.ensureJump(ctx, "mangle", "PREROUTING", "AVPS_PREROUTING", false, false)
-	lines := []string{"*mangle", "-F AVPS_OUTPUT", "-F AVPS_PREROUTING", "-A AVPS_OUTPUT -j MARK --set-mark " + warpMark}
+	// OUTPUT остаётся пустым: общая метка ломает внутренние проверки и SO_MARK самого WARP.
+	lines := []string{"*mangle", "-F AVPS_OUTPUT", "-F AVPS_PREROUTING"}
 	for _, iface := range append(append([]string{warpLaneHost}, m.Bridges...), warpInterface) {
 		lines = append(lines, "-A AVPS_PREROUTING -i "+iface+" -j MARK --set-mark "+warpMark)
 	}
 	lines = append(lines, fmt.Sprintf("-A AVPS_PREROUTING -i %s -p udp --dport %d -j MARK --set-mark %s", m.HostInterface, m.AWGPort, warpMark), "COMMIT")
 	s.run(ctx, []string{"iptables-restore", "-w", "5", "--noflush"}, 8*time.Second, strings.Join(lines, "\n")+"\n", false)
 	s.ensureJump(ctx, "mangle", "OUTPUT", "AVPS_OUTPUT", false, true)
-	s.run(ctx, []string{"ip6tables-restore", "-w", "5", "--noflush"}, 8*time.Second, "*mangle\n-F AVPS_OUTPUT\n-A AVPS_OUTPUT -j MARK --set-mark "+warpMark+"\nCOMMIT\n", false)
+	s.run(ctx, []string{"ip6tables-restore", "-w", "5", "--noflush"}, 8*time.Second, "*mangle\n-F AVPS_OUTPUT\nCOMMIT\n", false)
 }
 
 // configureHost восстанавливает только собственные таблицы, цепочки и клиентский маршрут.
 func (s *WarpSession) configureHost(ctx context.Context, path string) {
 	if s.Err != nil || s.Manifest == nil {
+		return
+	}
+	if path != "blocked" && s.Runtime.safetyHeld() {
+		s.fail("emergency_hold", "Аварийная блокировка запрещает изменять выход на доступный.", 409)
 		return
 	}
 	m := s.Manifest
@@ -278,7 +292,7 @@ func (s *WarpSession) configureHost(ctx context.Context, path string) {
 	for _, iface := range append(append([]string{warpLaneHost}, m.Bridges...), warpInterface) {
 		lines = append(lines, "-A AVPS_PREROUTING -i "+iface+" -j MARK --set-mark "+warpMark)
 	}
-	lines = append(lines, fmt.Sprintf("-A AVPS_PREROUTING -i %s -p udp --dport %d -j MARK --set-mark %s", m.HostInterface, m.AWGPort, warpMark), "-A AVPS_OUTPUT -j MARK --set-mark "+warpMark, "COMMIT", "*nat", "-F AVPS_NAT")
+	lines = append(lines, fmt.Sprintf("-A AVPS_PREROUTING -i %s -p udp --dport %d -j MARK --set-mark %s", m.HostInterface, m.AWGPort, warpMark), "COMMIT", "*nat", "-F AVPS_NAT")
 	sources := []string{m.ClientNetwork, warpLanePeerIP + "/32"}
 	if m.DNSIP != "" {
 		sources = append(sources, m.DNSIP+"/32")
@@ -356,6 +370,9 @@ func (s *WarpSession) enable(ctx context.Context) {
 	}
 	s.installBootDependencies(ctx)
 	s.guard(ctx, "blocked")
+	if !s.clearSafetyGuard(ctx) {
+		return
+	}
 	s.configureNamespace(ctx)
 	s.configureHost(ctx, "blocked")
 	s.write("integration_state.json", map[string]any{"status": "managed", "updated_at": warpNow()})

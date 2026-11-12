@@ -16,12 +16,30 @@ import (
 var warpTracePattern = regexp.MustCompile(`(?m)^warp=(on|plus)\r?$`)
 var warpDirectPattern = regexp.MustCompile(`(?m)^warp=off\r?$`)
 var warpConnectedPattern = regexp.MustCompile(`(?m)^Status update: Connected\s*$`)
+var warpDisconnectedPattern = regexp.MustCompile(`(?m)^Status update: Disconnected\s*$`)
 
 // status получает только булевы признаки WARP, скрывая регистрацию и сырые ответы.
 func (s *WarpSession) status(ctx context.Context) WarpStatus {
 	code, active, _ := warpExecute(ctx, []string{"systemctl", "is-active", "warp-svc.service"}, 2*time.Second, "", 8192, false)
 	statusCode, status, _ := warpExecute(ctx, []string{"warp-cli", "--accept-tos", "status"}, 5*time.Second, "", 8192, false)
 	return WarpStatus{Installed: warpProgram("warp-cli") != "", ServiceActive: code == 0 && strings.TrimSpace(active) == "active", Connected: statusCode == 0 && warpConnectedPattern.MatchString(status), ObservedAt: warpNow()}
+}
+
+// disconnected подтверждает остановленный daemon либо явный Disconnected, исключая Connecting/unknown.
+func (s *WarpSession) disconnected(ctx context.Context) bool {
+	code, active, apiError := warpExecute(ctx, []string{"systemctl", "is-active", "warp-svc.service"}, 2*time.Second, "", 8192, false)
+	if apiError != nil {
+		return false
+	}
+	serviceState := strings.TrimSpace(active)
+	if code != 0 && (serviceState == "inactive" || serviceState == "failed" || serviceState == "unknown") {
+		return true
+	}
+	if code != 0 || serviceState != "active" {
+		return false
+	}
+	statusCode, status, statusErr := warpExecute(ctx, []string{"warp-cli", "--accept-tos", "status"}, 5*time.Second, "", 8192, false)
+	return statusErr == nil && statusCode == 0 && warpDisconnectedPattern.MatchString(status)
 }
 
 // saveEgress сохраняет только подтверждённый путь и nullable время проверки.
@@ -40,6 +58,7 @@ func (s *WarpSession) warpProbe(ctx context.Context) bool {
 	if code, _ := s.optional(ctx, "ip", "link", "show", "dev", warpInterface); code != 0 {
 		return false
 	}
+	s.mutation(ctx, "warp.probe")
 	s.command(ctx, "ip", "-4", "route", "replace", "default", "dev", warpInterface, "metric", "10", "table", warpProbeTable)
 	if s.Err != nil {
 		return false
@@ -82,6 +101,16 @@ func (s *WarpSession) attemptRecovery(ctx context.Context, timeout time.Duration
 	if s.Err != nil {
 		return false
 	}
+	safetyMutation := warpSafetyCommand(args)
+	if safetyMutation && !s.requireSafety(ctx, false) {
+		return false
+	}
+	if warpTunnelCommand(args) && !s.protectAdmin(ctx) {
+		if s.Err == nil {
+			s.event("supervisor", "warning", "Служба WARP ещё не готова; подключение пропущено, применяется сохранённая политика выхода.")
+		}
+		return false
+	}
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
 		if remaining < 35*time.Second {
@@ -91,7 +120,17 @@ func (s *WarpSession) attemptRecovery(ctx context.Context, timeout time.Duration
 			timeout = remaining - 30*time.Second
 		}
 	}
+	s.mutation(ctx, "warp.recovery")
+	if s.Err != nil {
+		return false
+	}
+	if safetyMutation && !s.requireSafety(ctx, false) {
+		return false
+	}
 	code, _, err := warpExecute(ctx, args, timeout, "", 8192, false)
+	if safetyMutation && !s.safetyMutationFinished(ctx) {
+		return false
+	}
 	if err == nil && code == 0 {
 		return true
 	}
@@ -115,12 +154,17 @@ func (s *WarpSession) policySet(ctx context.Context, request PolicyUpdate) any {
 	if s.Err != nil {
 		return nil
 	}
-	if s.Manifest == nil && !candidate.WarpEnabled {
+	_, safetyGuardErr := os.Lstat(s.Runtime.safetyFile("safety_guard.json"))
+	if safetyGuardErr != nil && !os.IsNotExist(safetyGuardErr) {
+		s.fail("safety_guard_invalid", "Не удалось проверить аварийную блокировку.", 409)
+		return nil
+	}
+	if s.Manifest == nil && !candidate.WarpEnabled && os.IsNotExist(safetyGuardErr) {
 		if s.status(ctx).Connected {
 			s.fail("unsupported_topology", "Активный внешний WARP требует отдельной интеграции перед выбором direct.", 409)
 			return nil
 		}
-		s.mutation("policy.set")
+		s.mutation(ctx, "policy.set")
 		s.savePolicy(candidate)
 		return map[string]any{"policy": s.policy(), "egress": s.saveEgress("unknown", "Выбран существующий прямой выход; подтверждение доступно в диагностике.", false)}
 	}
@@ -131,7 +175,10 @@ func (s *WarpSession) policySet(ctx context.Context, request PolicyUpdate) any {
 	if s.Err != nil {
 		return nil
 	}
-	s.mutation("policy.set")
+	if candidate.WarpEnabled && !previous.WarpEnabled && !s.requireSafety(ctx, true) {
+		return nil
+	}
+	s.mutation(ctx, "policy.set")
 	if s.Manifest != nil {
 		s.guard(ctx, "blocked")
 		s.clearOwnedFlows(ctx)
@@ -149,18 +196,22 @@ func (s *WarpSession) reconnect(ctx context.Context) any {
 		s.fail("policy_conflict", "Переподключение требует включённой управляемой WARP интеграции.", 409)
 		return nil
 	}
+	if !s.requireSafety(ctx, true) {
+		return nil
+	}
 	s.preflight(ctx)
 	if s.Err != nil {
 		return nil
 	}
-	s.mutation("warp.reconnect")
+	s.mutation(ctx, "warp.reconnect")
 	if !policy.AllowDirect {
 		s.guard(ctx, "blocked")
 		s.clearOwnedFlows(ctx)
 	}
-	s.attemptRecovery(ctx, 8*time.Second, "warp-cli", "--accept-tos", "disconnect")
-	s.attemptRecovery(ctx, 8*time.Second, "warp-cli", "--accept-tos", "mode", "warp")
-	s.attemptRecovery(ctx, 8*time.Second, "warp-cli", "--accept-tos", "connect")
+	if s.attemptRecovery(ctx, 8*time.Second, "warp-cli", "--accept-tos", "disconnect") &&
+		s.attemptRecovery(ctx, 8*time.Second, "warp-cli", "--accept-tos", "mode", "warp") {
+		s.attemptRecovery(ctx, 8*time.Second, "warp-cli", "--accept-tos", "connect")
+	}
 	return s.reconcile(ctx, true)
 }
 
@@ -169,10 +220,13 @@ func (s *WarpSession) emergencyBlock(ctx context.Context, message string) {
 	if s.Manifest == nil {
 		return
 	}
+	boundary := &WarpSession{Runtime: s.Runtime}
+	boundary.mutation(ctx, "emergency.block")
 	guard := &WarpSession{Runtime: s.Runtime, Manifest: s.Manifest, PID: s.PID, DNSPID: s.DNSPID, Mutated: true}
 	guard.guard(ctx, "blocked")
 	guard.saveEgress("blocked", message, false)
 	s.Mutated = true
+	s.SafetyPending = s.SafetyPending || boundary.SafetyPending
 	if guard.Err != nil {
 		s.Err = failure(500, "guard_failed", "Защитный guard не подтверждён; требуется немедленная локальная проверка.")
 	}
@@ -181,6 +235,16 @@ func (s *WarpSession) emergencyBlock(ctx context.Context, message string) {
 // reconcile восстанавливает собственный путь и выбирает egress по явной политике и data-plane пробе.
 func (s *WarpSession) reconcile(ctx context.Context, explicit bool) any {
 	if s.Err != nil {
+		return nil
+	}
+	if s.Runtime.safetyHeld() {
+		s.emergencyBlock(ctx, "Аварийная блокировка: автоматическое подключение WARP и прямой выход остановлены.")
+		// Остановка WARP разрешена даже при ошибке guard; независимый rescue остаётся последней защитой.
+		if s.status(ctx).ServiceActive {
+			_, _, _ = warpExecute(ctx, []string{"warp-cli", "--accept-tos", "disconnect"}, 5*time.Second, "", 8192, false)
+			_, _, _ = warpExecute(ctx, []string{"systemctl", "stop", "--no-block", "warp-svc.service"}, 5*time.Second, "", 8192, false)
+		}
+		s.fail("emergency_hold", "Для возобновления нужна явная warp-safety resume через SSH.", 409)
 		return nil
 	}
 	policy := s.policy()
@@ -215,9 +279,12 @@ func (s *WarpSession) reconcile(ctx context.Context, explicit bool) any {
 		s.emergencyBlock(ctx, "Состояние правил не подтверждено; требуется проверка.")
 		return nil
 	}
-	s.mutation("repair")
 	if damaged || explicit {
+		s.mutation(ctx, "repair")
 		s.guard(ctx, "blocked")
+		if !s.clearSafetyGuard(ctx) {
+			return nil
+		}
 		s.configureNamespace(ctx)
 		s.configureHost(ctx, "blocked")
 	}
@@ -225,8 +292,10 @@ func (s *WarpSession) reconcile(ctx context.Context, explicit bool) any {
 		return nil
 	}
 	healthy := false
+	warpOffVerified := true
 	if policy.WarpEnabled {
 		status := s.status(ctx)
+		canProbe := status.ServiceActive
 		cooldown := s.readMap("recovery.json")
 		timestamp := warpTimestamp()
 		if !status.Connected && timestamp >= warpNumber(cooldown["retry_at"]) {
@@ -235,19 +304,26 @@ func (s *WarpSession) reconcile(ctx context.Context, explicit bool) any {
 				failureSince = timestamp
 			}
 			if timestamp-failureSince >= 120 && timestamp >= warpNumber(cooldown["restart_at"]) {
-				s.attemptRecovery(ctx, 10*time.Second, "systemctl", "restart", "warp-svc.service")
+				canProbe = s.attemptRecovery(ctx, 10*time.Second, "systemctl", "restart", "warp-svc.service")
 				cooldown["restart_at"] = timestamp + 300
 			} else {
-				s.attemptRecovery(ctx, 8*time.Second, "systemctl", "start", "warp-svc.service")
+				canProbe = s.attemptRecovery(ctx, 8*time.Second, "systemctl", "start", "warp-svc.service")
 			}
-			s.attemptRecovery(ctx, 8*time.Second, "warp-cli", "--accept-tos", "mode", "warp")
-			s.attemptRecovery(ctx, 8*time.Second, "warp-cli", "--accept-tos", "connect")
+			if canProbe {
+				canProbe = s.attemptRecovery(ctx, 8*time.Second, "warp-cli", "--accept-tos", "mode", "warp")
+			}
+			if canProbe {
+				canProbe = s.attemptRecovery(ctx, 8*time.Second, "warp-cli", "--accept-tos", "connect")
+			}
 			cooldown["retry_at"] = timestamp + 30
 			cooldown["failure_since"] = failureSince
 			s.write("recovery.json", cooldown)
 		}
 		cache := s.readMap("warp_probe.json")
-		if explicit || damaged || !status.Connected || timestamp-warpNumber(cache["at"]) >= float64(s.Runtime.Config.ProbeInterval) {
+		if !canProbe {
+			// Неготовый daemon не подтверждается прежним tunnel/cache; fallback остаётся решением policy.
+			s.write("warp_probe.json", map[string]any{"at": warpTimestamp(), "healthy": false})
+		} else if explicit || damaged || !status.Connected || timestamp-warpNumber(cache["at"]) >= float64(s.Runtime.Config.ProbeInterval) {
 			healthy = s.warpProbe(ctx)
 			s.write("warp_probe.json", map[string]any{"at": warpTimestamp(), "healthy": healthy})
 			if !healthy && status.Connected {
@@ -256,13 +332,16 @@ func (s *WarpSession) reconcile(ctx context.Context, explicit bool) any {
 					cooldown["failure_since"] = timestamp
 				}
 				if warpNumber(cooldown["data_failures"]) >= 3 && timestamp >= warpNumber(cooldown["retry_at"]) {
+					reconnectReady := false
 					if timestamp-warpNumber(cooldown["failure_since"]) >= 120 && timestamp >= warpNumber(cooldown["restart_at"]) {
-						s.attemptRecovery(ctx, 10*time.Second, "systemctl", "restart", "warp-svc.service")
+						reconnectReady = s.attemptRecovery(ctx, 10*time.Second, "systemctl", "restart", "warp-svc.service")
 						cooldown["restart_at"] = timestamp + 300
 					} else {
-						s.attemptRecovery(ctx, 8*time.Second, "warp-cli", "--accept-tos", "disconnect")
+						reconnectReady = s.attemptRecovery(ctx, 8*time.Second, "warp-cli", "--accept-tos", "disconnect")
 					}
-					s.attemptRecovery(ctx, 8*time.Second, "warp-cli", "--accept-tos", "connect")
+					if reconnectReady {
+						s.attemptRecovery(ctx, 8*time.Second, "warp-cli", "--accept-tos", "connect")
+					}
 					cooldown["retry_at"] = timestamp + 120
 				}
 				s.write("recovery.json", cooldown)
@@ -273,6 +352,16 @@ func (s *WarpSession) reconcile(ctx context.Context, explicit bool) any {
 		if healthy {
 			s.write("recovery.json", map[string]any{"retry_at": 0, "failure_since": 0, "restart_at": cooldown["restart_at"]})
 		}
+	} else {
+		if explicit {
+			s.write("recovery.json", map[string]any{"retry_at": 0, "failure_since": 0, "restart_at": 0})
+		}
+		status := s.status(ctx)
+		warpOffVerified = s.disconnected(ctx)
+		if !warpOffVerified || status.ServiceActive && explicit {
+			s.attemptRecovery(ctx, 8*time.Second, "warp-cli", "--accept-tos", "disconnect")
+			warpOffVerified = s.disconnected(ctx)
+		}
 	}
 	target := "blocked"
 	if healthy {
@@ -282,7 +371,11 @@ func (s *WarpSession) reconcile(ctx context.Context, explicit bool) any {
 	}
 	switched := oldPath != target || damaged || explicit
 	if switched {
+		s.mutation(ctx, "repair")
 		s.guard(ctx, "blocked")
+		if !s.clearSafetyGuard(ctx) {
+			return nil
+		}
 		s.configureHost(ctx, target)
 		s.clearOwnedFlows(ctx)
 		s.guard(ctx, target)
@@ -295,7 +388,7 @@ func (s *WarpSession) reconcile(ctx context.Context, explicit bool) any {
 		return map[string]any{"policy": policy, "egress": s.saveEgress("blocked", "WARP не подтверждён; прямой выход запрещён.", false)}
 	}
 	lastProbe := warpNumber(s.readMap("path_probe_time.json")["at"])
-	if !switched && warpTimestamp()-lastProbe < float64(s.Runtime.Config.ProbeInterval) {
+	if !switched && warpOffVerified && warpTimestamp()-lastProbe < float64(s.Runtime.Config.ProbeInterval) {
 		return map[string]any{"policy": policy, "egress": s.readMap("egress.json"), "checks": s.readMap("path_checks.json")["checks"]}
 	}
 	httpsOK, dnsOK := s.pathProbe(ctx, target)
@@ -311,26 +404,50 @@ func (s *WarpSession) reconcile(ctx context.Context, explicit bool) any {
 			checks[1] = warpCheck("egress.dns", "error", "Ответ UDP DNS не подтверждён.")
 		}
 	}
+	offWarning := ""
+	if !warpOffVerified {
+		offWarning = " Отключение WARP на VPS не подтверждено; операция завершена не полностью."
+		checks = append(checks, warpCheck("warp.disconnect", "warning", "Клиентский direct применяется, но WARP на VPS ещё не подтвердил отключение."))
+	}
 	s.write("path_checks.json", map[string]any{"checks": checks, "observed_at": warpNow()})
 	result := WarpEgress{}
 	if !httpsOK {
-		result = s.saveEgress("unknown", "Правила применены, но HTTPS выбранного выхода не подтверждён.", false)
+		result = s.saveEgress("unknown", "Правила применены, но HTTPS выбранного выхода не подтверждён."+offWarning, false)
 	} else {
 		message := "Выход подтверждён."
 		if dnsOK != nil && !*dnsOK {
 			message = "HTTPS подтверждён, DNS требует внимания."
 		}
-		result = s.saveEgress(target, message, true)
+		result = s.saveEgress(target, message+offWarning, true)
 	}
 	status := "warning"
-	if httpsOK && (dnsOK == nil || *dnsOK) {
+	if httpsOK && (dnsOK == nil || *dnsOK) && warpOffVerified {
 		status = "succeeded"
 	}
 	s.event("supervisor", status, result.Message)
 	if explicit && (!httpsOK || (dnsOK != nil && !*dnsOK)) {
 		s.fail("verification_failed", "Правила применены, но проверка HTTPS/DNS не завершилась успешно; восстановление не подтверждено.", 502)
 	}
-	return map[string]any{"policy": policy, "egress": result, "checks": checks}
+	return map[string]any{"policy": policy, "egress": result, "checks": checks, "complete": httpsOK && (dnsOK == nil || *dnsOK) && warpOffVerified}
+}
+
+// registrationReady ограниченно ждёт загрузки регистрации после запуска службы типа simple.
+func (s *WarpSession) registrationReady(ctx context.Context) bool {
+	readyCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		code, _, apiError := warpExecute(readyCtx, []string{"warp-cli", "--accept-tos", "registration", "show"}, 2*time.Second, "", 8192, false)
+		if apiError == nil && code == 0 {
+			return true
+		}
+		select {
+		case <-readyCtx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 // setup устанавливает только WARP из официального APT источника после защиты административного пути.
@@ -338,6 +455,9 @@ func (s *WarpSession) setup(ctx context.Context) any {
 	policy := s.policy()
 	if !policy.Configured {
 		s.fail("policy_conflict", "До установки WARP явно выберите политику выхода.", 409)
+		return nil
+	}
+	if !s.requireSafety(ctx, true) {
 		return nil
 	}
 	s.preflight(ctx)
@@ -375,7 +495,7 @@ func (s *WarpSession) setup(ctx context.Context) any {
 			return nil
 		}
 	}
-	s.mutation("warp.setup")
+	s.mutation(ctx, "warp.setup")
 	// Guard/admin защищены до apt postinst, который способен автоматически запустить daemon.
 	s.enable(ctx)
 	initial := "blocked"
@@ -421,8 +541,10 @@ func (s *WarpSession) setup(ctx context.Context) any {
 		}
 	}
 	s.run(ctx, []string{"systemctl", "enable", "--now", "warp-svc.service"}, 15*time.Second, "", false)
-	code, _ := s.optional(ctx, "warp-cli", "--accept-tos", "registration", "show")
-	if code != 0 {
+	if s.Err != nil {
+		return nil
+	}
+	if !s.registrationReady(ctx) {
 		if installed || registrationExists {
 			s.fail("registration_unavailable", "Существующая регистрация WARP не подтверждена; credentials не сбрасываются.", 409)
 			return nil
@@ -434,7 +556,11 @@ func (s *WarpSession) setup(ctx context.Context) any {
 	}
 	result := s.reconcile(ctx, true)
 	if s.Err == nil {
-		s.event("warp.setup", "succeeded", "WARP подготовлен; выбранный выход и DNS проверены. AWG/Docker не устанавливались.")
+		if complete, present := warpMap(result)["complete"].(bool); present && !complete {
+			s.event("warp.setup", "warning", "Подготовка WARP завершена не полностью; требуется проверка диагностики.")
+		} else {
+			s.event("warp.setup", "succeeded", "WARP подготовлен; выбранный выход и DNS проверены. AWG/Docker не устанавливались.")
+		}
 	}
 	return result
 }
@@ -447,7 +573,7 @@ func (s *WarpSession) diagnostics(ctx context.Context) any {
 	if policy.WarpEnabled {
 		severity = "error"
 	}
-	checks := []WarpCheck{warpCheck("warp.service", severity, "Служба WARP не запущена."), warpCheck("warp.tunnel", severity, "Подключение WARP не подтверждено.")}
+	checks := []WarpCheck{warpCheck("warp.service", severity, "Служба WARP не запущена."), warpCheck("warp.tunnel", severity, "Подключение WARP не подтверждено."), s.safetyCheck()}
 	if status.ServiceActive {
 		checks[0] = warpCheck("warp.service", "ok", "Служба WARP работает.")
 	}
@@ -460,7 +586,7 @@ func (s *WarpSession) diagnostics(ctx context.Context) any {
 		checks = append(checks, warpCheck("routing.capability", "warning", observation.Err.Message))
 	} else if s.Manifest == nil {
 		checks = append(checks, warpCheck("routing.managed", "unknown", "Собственная интеграция не включена; маршруты наблюдаются."))
-		if policy.Configured && !policy.WarpEnabled {
+		if policy.Configured && !policy.WarpEnabled && !s.Runtime.safetyHeld() {
 			httpsOK, dnsOK := observation.pathProbe(ctx, "direct")
 			if httpsOK {
 				checks = append(checks, warpCheck("egress.https", "ok", "Прямой HTTPS подтверждён."))
@@ -499,11 +625,33 @@ func (s *WarpSession) diagnostics(ctx context.Context) any {
 func (s *WarpSession) overview(ctx context.Context) any {
 	egress := WarpEgress{Path: "unknown", Message: "Выход ещё не проверен.", ObservedAt: warpNow()}
 	s.read("egress.json", &egress)
-	checks := s.readMap("diagnostics.json")["checks"]
-	if checks == nil {
-		checks = []any{}
+	checks := []any{}
+	for _, check := range warpList(s.readMap("diagnostics.json")["checks"]) {
+		if warpString(warpMap(check)["id"]) != "routing.safety" {
+			checks = append(checks, check)
+		}
+	}
+	checks = append(checks, s.safetyCheck())
+	if s.Runtime.safetyHeld() && egress.Path != "blocked" {
+		egress = WarpEgress{Path: "unknown", Message: "Аварийное удержание активно; проверьте результат блокировки через warp-safety status.", ObservedAt: warpNow()}
 	}
 	return map[string]any{"warp": s.status(ctx), "policy": s.policy(), "egress": egress, "checks": checks}
+}
+
+// safetyCheck показывает текущее ограничение без адресов SSH и приватного snapshot.
+func (s *WarpSession) safetyCheck() WarpCheck {
+	state, apiError := s.Runtime.safetyStatus()
+	if apiError != nil || s.Runtime.safetyHeld() {
+		return warpCheck("routing.safety", "error", "Действует аварийная блокировка; возобновление WARP выполняется явно через SSH.")
+	}
+	switch state.Status {
+	case "armed":
+		return warpCheck("routing.safety", "warning", "Таймер вооружён. Подтвердите новое SSH-подключение до истечения срока.")
+	case "confirmed":
+		return warpCheck("routing.safety", "ok", "Административный доступ подтверждён новым SSH-подключением.")
+	default:
+		return warpCheck("routing.safety", "unknown", "Перед настройкой или включением WARP выполните warp-safety arm через SSH.")
+	}
 }
 
 // logs возвращает только безопасные события supervisor либо отредактированный WARP journal.

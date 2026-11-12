@@ -24,7 +24,7 @@ import (
 // runWarp запускает root WARP API, ранний guard, проверку конфигурации либо локальный CLI запрос.
 func runWarp(args []string) error {
 	if len(args) == 0 {
-		return errors.New("нужен режим warp: serve, guard, check-config, request или probe-dns")
+		return errors.New("нужен режим warp: serve, guard, safety, check-config, request или probe-dns")
 	}
 	mode := args[0]
 	if mode == "probe-dns" {
@@ -56,7 +56,7 @@ func runWarp(args []string) error {
 		}
 		return warpCLIRequest(ctx, *socketPath, flags.Arg(0))
 	}
-	if flags.NArg() != 0 {
+	if mode != "safety" && flags.NArg() != 0 {
 		return errors.New("лишние параметры warp")
 	}
 	runtime, err := warpLoadConfig(*configPath)
@@ -64,6 +64,8 @@ func runWarp(args []string) error {
 		return err
 	}
 	switch mode {
+	case "safety":
+		return runtime.safetyCLI(ctx, *configPath, flags.Args())
 	case "check-config":
 		session := runtime.newSession()
 		session.validateStoredState()
@@ -75,6 +77,9 @@ func runWarp(args []string) error {
 	case "guard":
 		guardCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 		defer cancel()
+		if err := runtime.safetyBoot(guardCtx); err != nil {
+			return err
+		}
 		lock, err := runtime.lock(guardCtx)
 		if err != nil {
 			return err
@@ -87,6 +92,9 @@ func runWarp(args []string) error {
 		}
 		return nil
 	case "serve":
+		if err := runtime.safetyBoot(ctx); err != nil {
+			return err
+		}
 		return runtime.serve(ctx, *socketPath)
 	default:
 		return errors.New("неподдерживаемый режим warp")
@@ -214,6 +222,10 @@ func (r *WarpRuntime) dispatch(ctx context.Context, request Request) Response {
 		response.Error = failure(400, "unsupported", "Действие не разрешено WARP runtime.")
 		return response
 	}
+	if mutation && r.safetyHeld() {
+		response.Error = failure(409, "emergency_hold", "Действует аварийная блокировка WARP. Проверьте warp-safety status; возобновление выполняется явно через SSH.")
+		return response
+	}
 	timeout := 30 * time.Second
 	if mutation {
 		timeout = 90 * time.Second
@@ -279,12 +291,14 @@ func (r *WarpRuntime) dispatch(ctx context.Context, request Request) Response {
 			}
 		}
 	}
+	s.finishSafetyOperation(ctx)
 	if s.Err != nil {
 		if s.Mutated {
 			// Независимый короткий бюджет сохраняет fail-closed после истёкшей операции.
 			guardCtx, guardCancel := context.WithTimeout(context.WithoutCancel(ctx), 12*time.Second)
 			s.emergencyBlock(guardCtx, "Операция не завершена; клиентский путь закрыт до проверки.")
 			guardCancel()
+			s.finishSafetyOperation(ctx)
 			response.Error = failure(s.Err.Status, "mutation_failed", s.Err.Message)
 		} else {
 			response.Error = s.Err
@@ -383,10 +397,12 @@ func (r *WarpRuntime) supervise(ctx context.Context) {
 		if s.Err == nil && s.Manifest != nil {
 			s.reconcile(operationCtx, false)
 		}
+		s.finishSafetyOperation(ctx)
 		if s.Err != nil && s.Manifest != nil {
 			guardCtx, guardCancel := context.WithTimeout(context.WithoutCancel(ctx), 12*time.Second)
 			s.emergencyBlock(guardCtx, "Supervisor не подтвердил безопасное состояние; выход закрыт.")
 			guardCancel()
+			s.finishSafetyOperation(ctx)
 			fmt.Fprintln(os.Stderr, "WARP supervisor: "+s.Err.Code)
 		}
 		_ = lock.Close()

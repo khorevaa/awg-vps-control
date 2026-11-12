@@ -246,7 +246,7 @@ func (s *WarpSession) attach(ctx context.Context, request AttachRequest) any {
 		s.fail("configuration_changed", "Контейнер управляемой интеграции пересоздан.", 409)
 		return nil
 	}
-	s.mutation("integration.attach")
+	s.mutation(ctx, "integration.attach")
 	s.write("installation.json", value)
 	s.event("attach", "succeeded", "Существующая установка подключена без изменения VPN.")
 	return map[string]any{"installation": value, "policy": s.policy()}

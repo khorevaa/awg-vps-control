@@ -109,7 +109,7 @@
   function renderChecks(target, checks) {
     const node = el(target); node.replaceChildren();
     if (!Array.isArray(checks) || !checks.length) { const empty = document.createElement("p"); empty.className = "empty"; empty.textContent = "Нет результатов проверок."; node.append(empty); return; }
-    const names = { "awg.container": "Контейнер AmneziaWG", "awg.interface": "Интерфейс AmneziaWG", "warp.service": "Служба WARP", "warp.tunnel": "Туннель WARP", "routing.capability": "Совместимость маршрутизации", "routing.managed": "Управляемые маршруты", "routing.guard": "Защита выхода", "egress.https": "Проверка HTTPS", "egress.dns": "Проверка DNS" };
+    const names = { "awg.container": "Контейнер AmneziaWG", "awg.interface": "Интерфейс AmneziaWG", "warp.service": "Служба WARP", "warp.tunnel": "Туннель WARP", "routing.capability": "Совместимость маршрутизации", "routing.managed": "Управляемые маршруты", "routing.guard": "Защита выхода", "routing.safety": "Защита административного доступа", "warp.disconnect": "Отключение WARP", "egress.https": "Проверка HTTPS", "egress.dns": "Проверка DNS" };
     for (const check of checks) {
       const row = document.createElement("div"), pill = document.createElement("span"), copy = document.createElement("div"), heading = document.createElement("strong"), message = document.createElement("p"), when = document.createElement("small");
       row.className = "check"; copy.className = "check-copy";

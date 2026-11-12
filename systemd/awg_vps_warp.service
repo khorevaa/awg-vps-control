@@ -19,6 +19,8 @@ RuntimeDirectoryMode=0750
 RuntimeDirectoryPreserve=yes
 UMask=0077
 NoNewPrivileges=true
+# systemd 255 сохраняет CAP_SETUID для sandbox-пользователя _apt только при явном ambient.
+AmbientCapabilities=CAP_SETUID
 PrivateTmp=true
 ProtectHome=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK

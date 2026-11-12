@@ -18,6 +18,7 @@ command=${1:-}
 if [[ -z $command ]]; then if [[ -t 0 && -t 1 ]]; then command=menu; else command=status; fi; fi
 case $command in
     menu) exec bash "$release/awg_vps_control.sh" menu ;;
+    warp-safety) shift; exec "$release/bin/awg_control" warp safety "$@" ;;
     start-ui)
         systemd-tmpfiles --create /etc/tmpfiles.d/awg_vps_control.conf
         compose up -d --remove-orphans --wait --wait-timeout 90

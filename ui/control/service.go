@@ -144,6 +144,15 @@ func (service *Service) execute(ctx context.Context, record OperationRecord) {
 	if !service.store.Update(record.Operation.ID, "verifying", nil, nil) {
 		return
 	}
+	var result map[string]json.RawMessage
+	var complete *bool
+	if json.Unmarshal(response.Data, &result) == nil && json.Unmarshal(result["complete"], &complete) == nil && complete != nil && !*complete {
+		apiError := failure(502, "verification_incomplete", "Часть изменений применена, но завершение операции не подтверждено. Проверьте диагностику.")
+		if service.store.Update(record.Operation.ID, "manual_recovery_required", operationResult(response.Data), apiError) {
+			log.Printf("операция %s %s: manual_recovery_required", record.Operation.ID, record.Operation.Action)
+		}
+		return
+	}
 	if service.store.Update(record.Operation.ID, "succeeded", operationResult(response.Data), nil) {
 		log.Printf("операция %s %s: succeeded", record.Operation.ID, record.Operation.Action)
 	}

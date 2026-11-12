@@ -42,12 +42,13 @@ type WarpRuntime struct {
 
 // WarpSession изолирует ошибку и проверенные ресурсы одной операции.
 type WarpSession struct {
-	Runtime  *WarpRuntime  // Общие неизменяемые настройки.
-	Err      *APIError     // Первая ошибка, останавливающая последующие команды.
-	Mutated  bool          // Признак начала изменения состояния.
-	Manifest *WarpManifest // Проверенный manifest собственных ресурсов.
-	PID      int           // PID сетевого namespace AWG.
-	DNSPID   int           // PID сетевого namespace DNS.
+	Runtime       *WarpRuntime  // Общие неизменяемые настройки.
+	Err           *APIError     // Первая ошибка, останавливающая последующие команды.
+	Mutated       bool          // Признак начала изменения состояния.
+	SafetyPending bool          // Эта сессия записала и вправе завершить safety operation.
+	Manifest      *WarpManifest // Проверенный manifest собственных ресурсов.
+	PID           int           // PID сетевого namespace AWG.
+	DNSPID        int           // PID сетевого namespace DNS.
 }
 
 // WarpPolicy содержит явное намерение пользователя.
@@ -221,8 +222,30 @@ func (s *WarpSession) run(ctx context.Context, args []string, timeout time.Durat
 	if s.Err != nil {
 		return -1, ""
 	}
+	safetyMutation := warpSafetyCommand(args)
+	if safetyMutation && !s.requireSafety(ctx, false) {
+		return -1, ""
+	}
+	if warpTunnelCommand(args) && !s.protectAdmin(ctx) {
+		if s.Err == nil {
+			s.fail("warp_not_ready", "Служба WARP ещё не загрузила регистрацию; подключение отложено.", 409)
+		}
+		return -1, ""
+	}
 	aptCommand := len(args) > 0 && filepath.Base(args[0]) == "apt-get"
+	if safetyMutation && !s.requireSafety(ctx, false) {
+		return -1, ""
+	}
 	code, output, err := warpExecute(ctx, args, timeout, input, maxMessageBytes, aptCommand)
+	if aptCommand && code != 0 && output != "" {
+		// Детали пакетного менеджера доступны только root и никогда не возвращаются в API.
+		if logErr := atomicPrivateFile(filepath.Join(s.Runtime.Config.StateDir, "apt_failure.log"), []byte(output)); logErr != nil {
+			s.event("warp.setup", "warning", "Не удалось сохранить приватную причину отказа APT.")
+		}
+	}
+	if safetyMutation && !s.safetyMutationFinished(ctx) {
+		return -1, ""
+	}
 	if err != nil {
 		s.Err = err
 		return -1, ""
@@ -243,6 +266,43 @@ func (s *WarpSession) run(ctx context.Context, args []string, timeout time.Durat
 		s.fail("command_failed", message, 502)
 	}
 	return code, output
+}
+
+// warpSafetyCommand выделяет штатные команды, способные запустить или подключить WARP.
+func warpSafetyCommand(args []string) bool {
+	if len(args) < 2 {
+		return false
+	}
+	program := filepath.Base(args[0])
+	joined := " " + strings.Join(args[1:], " ") + " "
+	if program == "warp-cli" {
+		return strings.Contains(joined, " connect ") || strings.Contains(joined, " mode ") || strings.Contains(joined, " registration new ")
+	}
+	if program == "systemctl" && strings.Contains(joined, " warp-svc.service ") {
+		return strings.Contains(joined, " start ") || strings.Contains(joined, " restart ") || strings.Contains(joined, " --now ")
+	}
+	if program == "apt-get" && strings.Contains(joined, " install ") && strings.Contains(joined, " cloudflare-warp ") {
+		return true
+	}
+	return false
+}
+
+// finishSafetyOperation отмечает конец всей сетевой операции до освобождения host.lock.
+func (s *WarpSession) finishSafetyOperation(ctx context.Context) {
+	if !s.SafetyPending {
+		return
+	}
+	state, err := s.Runtime.safetyRead()
+	if err != nil {
+		s.fail("safety_invalid", "Не подтверждено состояние защиты после сетевой операции.", 409)
+		return
+	}
+	if state.Status != "armed" {
+		return
+	}
+	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 4*time.Second)
+	defer cancel()
+	s.safetyOperationFinished(finishCtx)
 }
 
 // command выполняет ограниченную штатную команду.
@@ -323,7 +383,18 @@ func (s *WarpSession) event(action, status, message string) {
 }
 
 // mutation отмечает границу, после которой нельзя заявлять безопасный preflight-отказ.
-func (s *WarpSession) mutation(action string) {
+func (s *WarpSession) mutation(ctx context.Context, action string) {
+	if s.Err != nil {
+		return
+	}
+	state, err := s.Runtime.safetyRead()
+	if err != nil {
+		s.fail("safety_invalid", "Не подтверждено состояние защиты перед изменением.", 409)
+		return
+	}
+	if state.Status == "armed" && !s.safetyMutationFinished(ctx) {
+		return
+	}
 	s.Mutated = true
 	s.write("mutation_started.json", map[string]any{"action": action, "at": warpNow()})
 }

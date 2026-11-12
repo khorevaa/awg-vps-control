@@ -181,6 +181,7 @@ usage() {
   reconnect-warp                 Переподключить WARP; соединения могут прерваться
   repair                         Восстановить свои маршруты/правила и WARP
   restart-awg [--confirm]         Отдельно подтвердить ручной перезапуск AWG
+  warp-safety <действие>          arm/confirm/status/hold/resume — защита SSH при настройке WARP
   start | stop | restart         Управлять только Web, Control и Adapter
   help | version | menu
 
@@ -225,6 +226,7 @@ dispatch() {
         setup-warp|warp-setup) no_arguments "$@"; runtime_task setup-warp ;;
         reconnect-warp|warp-reconnect) no_arguments "$@"; runtime_task reconnect-warp ;;
         repair) no_arguments "$@"; runtime_task repair ;;
+        warp-safety) runtime_task warp-safety "$@" ;;
         start|start-ui) no_arguments "$@"; runtime_task start-ui ;;
         stop|stop-ui) no_arguments "$@"; runtime_task stop-ui ;;
         restart|restart-ui) no_arguments "$@"; runtime_task restart-ui ;;
