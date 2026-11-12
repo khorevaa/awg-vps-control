@@ -15,6 +15,7 @@
 *.pfx
 *.conf
 !*.conf.example
+!systemd/awg_vps_control.conf
 *.private.env.json
 http-client.private.env.json
 state.json

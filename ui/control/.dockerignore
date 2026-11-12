@@ -1,0 +1,4 @@
+.env*
+*.private.env.json
+state.json
+*.log

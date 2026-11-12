@@ -1,0 +1,27 @@
+[Unit]
+Description=AWG VPS WARP policy, routing and recovery
+After=docker.service network-online.target awg_vps_guard.service
+Wants=network-online.target
+Requires=awg_vps_guard.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=AWG_WARP_CONFIG=/etc/awg_vps_control/host.json
+Environment=AWG_WARP_SOCKET=/run/awg_vps_warp/warp.sock
+ExecStartPre=/usr/bin/install -d -o 0 -g 10002 -m 0750 /run/awg_vps_warp
+ExecStart=/opt/awg_vps_control/current/bin/awg_control warp serve
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=awg_vps_warp
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

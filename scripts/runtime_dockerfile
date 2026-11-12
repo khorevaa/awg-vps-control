@@ -1,0 +1,16 @@
+FROM scratch
+ARG COMPONENT
+ARG RUNTIME_USER
+ARG VERSION
+ARG REVISION
+LABEL org.opencontainers.image.source="https://github.com/khorevaa/awg-vps-control" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.awg-vps-control.component="${COMPONENT}"
+COPY --chmod=0755 bin/awg_${COMPONENT} /usr/local/bin/awg_component
+USER ${RUNTIME_USER}
+# Adapter использует образ Control; Compose задаёт его режим и отдельный healthcheck.
+STOPSIGNAL SIGTERM
+HEALTHCHECK --interval=10s --timeout=8s --start-period=5s --retries=6 CMD ["/usr/local/bin/awg_component", "healthcheck"]
+ENTRYPOINT ["/usr/local/bin/awg_component"]

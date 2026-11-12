@@ -1,0 +1,122 @@
+### Задайте base_url, origin и access_secret в локальном приватном HTTP environment.
+### base_url и origin: http://awg-<имя>.localhost:<порт SSH-туннеля>.
+### Секрет не сохраняйте в репозитории; cookie обрабатывается HTTP Client.
+
+### Healthcheck без сведений о сервере
+GET {{base_url}}/api/v1/health
+
+> {%
+client.test("Healthcheck", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+%}
+
+### Вход по секрету
+POST {{base_url}}/api/v1/access
+Origin: {{origin}}
+Content-Type: application/json
+
+{
+  "secret": "{{access_secret}}"
+}
+
+> {%
+client.test("Вход", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+client.global.set("csrf_token", response.body.csrf_token);
+%}
+
+### Проверка сессии
+GET {{base_url}}/api/v1/auth/me
+
+> {%
+client.test("Сессия", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+client.global.set("csrf_token", response.body.csrf_token);
+%}
+
+### Обзор VPS
+GET {{base_url}}/api/v1/overview
+
+> {%
+client.test("Обзор", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+%}
+
+### Обнаружение установок
+GET {{base_url}}/api/v1/discovery
+
+> {%
+client.test("Обнаружение", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+%}
+
+### Родные пользователи Amnezia, только чтение
+GET {{base_url}}/api/v1/peers
+
+> {%
+client.test("Клиенты", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+%}
+
+### Диагностические проверки
+GET {{base_url}}/api/v1/diagnostics
+
+> {%
+client.test("Диагностика", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+%}
+
+### Маскированный снимок конфигурации
+GET {{base_url}}/api/v1/configuration
+
+> {%
+client.test("Конфигурация", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+%}
+
+### Текущая политика
+GET {{base_url}}/api/v1/policy
+
+> {%
+client.test("Политика", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+%}
+
+### Ограниченный снимок журналов
+GET {{base_url}}/api/v1/logs?source=awg&limit=50
+
+> {%
+client.test("Журнал", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+%}
+
+### Журнал операций
+GET {{base_url}}/api/v1/operations
+
+> {%
+client.test("Операции", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+%}
+
+### Завершение сессии
+POST {{base_url}}/api/v1/auth/logout
+Origin: {{origin}}
+X-CSRF-Token: {{csrf_token}}
+
+> {%
+client.test("Выход", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+client.global.clear("csrf_token");
+%}

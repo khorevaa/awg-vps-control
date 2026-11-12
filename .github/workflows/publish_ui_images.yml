@@ -1,0 +1,63 @@
+name: Publish UI images
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact version from the version file (without v)
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-awg-ui-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+  publish:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate release identity
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == 'khorevaa/awg-vps-control' ]]
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          [[ "$VERSION" == "$(cat version)" ]]
+          [[ "$GITHUB_REF" == refs/heads/develop || "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == "refs/tags/v$VERSION" ]]
+      - name: Retrieve verified release bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name awg_vps_control_linux_amd64 --dir dist
+          (cd dist && sha256sum --check awg_vps_control_linux_amd64.tar.gz.sha256)
+          tar -xzf dist/awg_vps_control_linux_amd64.tar.gz -C dist
+          [[ "$(cat dist/release/source_revision)" == "$GITHUB_SHA" ]]
+          sudo dist/release/bin/awg_control install-tools verify-release dist/release
+      - name: Publish verified pair of images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: bash .github/scripts/publish_images.sh dist/release

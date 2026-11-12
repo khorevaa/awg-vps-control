@@ -1,0 +1,132 @@
+name: awg_vps_control
+services:
+  web:
+    image: awg_vps_web:${AWG_UI_IMAGE_TAG:?image tag required}
+    user: "10001:10001"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    environment:
+      AWG_WEB_SOCKET: /run/awg_vps_web/web.sock
+      AWG_CONTROL_SOCKET: /run/awg_vps_control/control.sock
+      AWG_ACCESS_SECRET_FILE: /run/awg_vps_secrets/access_secret
+      AWG_WEB_STATE: /var/lib/awg_vps_control/web/state.json
+      AWG_ALLOWED_HOST: ${AWG_ALLOWED_HOST:?host required}
+      AWG_ALLOWED_ORIGIN: ${AWG_ALLOWED_ORIGIN:?origin required}
+    volumes:
+      - type: bind
+        source: /run/awg_vps_web
+        target: /run/awg_vps_web
+        bind: {create_host_path: false}
+      - type: bind
+        source: /run/awg_vps_control
+        target: /run/awg_vps_control
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /etc/awg_vps_control/web
+        target: /run/awg_vps_secrets
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /var/lib/awg_vps_control/web
+        target: /var/lib/awg_vps_control/web
+        bind: {create_host_path: false}
+    depends_on:
+      control:
+        condition: service_healthy
+  control:
+    image: awg_vps_control:${AWG_UI_IMAGE_TAG:?image tag required}
+    user: "10002:10001"
+    group_add: ["10002"]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    environment:
+      AWG_CONTROL_SOCKET: /run/awg_vps_control/control.sock
+      AWG_HOST_SOCKET: /run/awg_vps_adapter/adapter.sock
+      AWG_CONTROL_STATE: /var/lib/awg_vps_control/control/state.json
+      AWG_WEB_UID: "10001"
+    volumes:
+      - type: bind
+        source: /run/awg_vps_control
+        target: /run/awg_vps_control
+        bind: {create_host_path: false}
+      - type: bind
+        source: /run/awg_vps_adapter
+        target: /run/awg_vps_adapter
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /var/lib/awg_vps_control/control
+        target: /var/lib/awg_vps_control/control
+        bind: {create_host_path: false}
+    depends_on:
+      adapter:
+        condition: service_healthy
+  adapter:
+    image: awg_vps_control:${AWG_UI_IMAGE_TAG:?image tag required}
+    command: [adapter, serve]
+    user: "10003:10002"
+    group_add: ["${AWG_DOCKER_GID:?Docker socket group required}"]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    environment:
+      AWG_ADAPTER_SOCKET: /run/awg_vps_adapter/adapter.sock
+      AWG_WARP_SOCKET: /run/awg_vps_warp/warp.sock
+      AWG_DOCKER_SOCKET: /var/run/docker.sock
+      AWG_ADAPTER_STATE: /var/lib/awg_vps_control/adapter
+      AWG_HOST_METRICS: /run/awg_vps_metrics
+    volumes:
+      - type: bind
+        source: /run/awg_vps_adapter
+        target: /run/awg_vps_adapter
+        bind: {create_host_path: false}
+      - type: bind
+        source: /run/awg_vps_warp
+        target: /run/awg_vps_warp
+        read_only: true
+        bind: {create_host_path: false}
+      # Read-only mount не ограничивает методы Docker API: adapter доверен как root.
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /var/lib/awg_vps_control/adapter
+        target: /var/lib/awg_vps_control/adapter
+        bind: {create_host_path: false}
+      - type: bind
+        source: /etc/hostname
+        target: /run/awg_vps_metrics/hostname
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /proc/uptime
+        target: /run/awg_vps_metrics/uptime
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /proc/loadavg
+        target: /run/awg_vps_metrics/loadavg
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /proc/meminfo
+        target: /run/awg_vps_metrics/meminfo
+        read_only: true
+        bind: {create_host_path: false}
+    healthcheck:
+      test: [CMD, /usr/local/bin/awg_component, adapter, healthcheck]
+      interval: 10s
+      timeout: 8s
+      start_period: 5s
+      retries: 6

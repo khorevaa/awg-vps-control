@@ -2,7 +2,9 @@
 
 Закрытая веб-панель для личных VPS с существующим AmneziaWG и необязательным Cloudflare WARP. На каждом VPS работает отдельная панель с доступом через SSH-туннель; сторонние администраторы и центральное управление серверами не предусмотрены.
 
-**Статус: требования согласованы 12 ноября 2026 года. Приложение пока не реализовано.**
+**Статус: реализация первого выпуска `0.1.0-dev`, проходит интеграционные испытания.**
+
+Стабильный выпуск пока не готов: при включении WARP выявлена потеря SSH, исправление и повторная сетевая приёмка обязательны. Фактически пройденные проверки и оставшиеся задачи — в [протоколе готовности](docs/verification_status.md).
 
 Проект не устанавливает, не переустанавливает и не обновляет AWG. Он подключается к существующей установке. Установка панели не должна менять работающий VPN, его ключи, peers, Docker-сети или маршруты.
 
@@ -10,14 +12,41 @@ WARP можно установить и настроить отдельным я
 
 ## Основа
 
-- Стек и интерфейс [khorevaa/ocserv-vps](https://github.com/khorevaa/ocserv-vps): Go 1.26, два сервиса Web/Control, HTML/CSS/JavaScript без frontend-фреймворка, Unix sockets, SSH-туннель, Docker Compose, systemd и Bash.
+- Стек и интерфейс [khorevaa/ocserv-vps](https://github.com/khorevaa/ocserv-vps): Go 1.26.9, два модуля Web/Control, HTML/CSS/JavaScript без frontend-фреймворка, Unix sockets, SSH-туннель, Docker Compose и Bash. Python в runtime не требуется.
 - Практические решения предыдущей работы: существующий AWG в Docker, официальный WARP в режиме полного туннеля, DNS, защита от прямого выхода при отказе WARP и восстановление маршрутизации.
 - Первый целевой профиль: Ubuntu 24.04, Linux amd64, уже установленные Docker/Compose и AmneziaWG. Версия протокола и возможности tools проверяются отдельно от имени контейнера; поддержка других установок включается после проверки адаптера.
+
+Панель работает в трёх Docker-контейнерах: Web, Control и Adapter. Образ Control используется также для Adapter; все контейнеры изолированы от сети. Только Adapter имеет Docker socket для ограниченных операций над существующим AWG. Такой доступ даёт ему полномочия уровня root; Web и Control его не получают.
+
+WARP работает **на хосте** через официальный `warp-svc.service`. Там же остаются две проектные systemd-службы: Go WARP agent объединяет IPC и supervisor, отдельный guard восстанавливает защиту до запуска Docker/WARP. Docker Adapter обращается к хостовому агенту через Unix socket; WARP-клиента в контейнерах панели нет. UI и общий host bridge через systemd не запускаются; sockets готовит tmpfiles, контейнеры восстанавливает Docker. AWG-контейнер сохраняется существующим.
+
+## Управление с консоли
+
+`awg_vps_control.sh` сохраняет структуру менеджера ocserv-vps: цветное меню с версией, пошаговое подключение AWG, отдельные команды установки/обновления панели, доступа, настроек и WARP.
+
+```bash
+# Установка из заранее собранного bundle на VPS:
+sudo bash awg_vps_control.sh install-ui /root/awg_vps_release/release
+# Меню после установки:
+sudo awg-vps-control
+# Именованные команды:
+sudo awg-vps-control doctor
+sudo awg-vps-control attach
+sudo awg-vps-control policy
+sudo awg-vps-control ui-access root@YOUR_VPS
+```
+
+`install-ui` / `update-ui` также принимают опубликованный release-тег или `latest`, проверяя SHA-256 архива. Пока публичного выпуска нет, используйте локальный bundle. `update-manager` обновляет менеджер вместе с совместимыми runtime/UI. `start`, `stop`, `restart` управляют только тремя контейнерами панели; `uninstall-ui` сохраняет WARP, его защиту и AWG. Полный перечень — `help`, режим без диалогов — `AWG_VPS_NONINTERACTIVE=1`.
 
 ## Документы
 
 - [Анализ исходных проектов и прошлого чата](docs/source_analysis.md).
 - [План разработки, архитектура и критерии приёмки](docs/development_plan.md).
+- [Установка и эксплуатация](docs/operations_guide.md).
+- [Управляющий скрипт: меню, команды, обновления и соответствие ocserv-vps](docs/manual_control.md).
+- [API и Unix-протокол](docs/api.md).
+- [Совместимость](docs/compatibility.md) и [хостовый сетевой адаптер](docs/host_runtime.md).
+- [Автоматическая сборка контейнеров и выпуск](docs/release_guide.md).
 
 ## Первый выпуск
 

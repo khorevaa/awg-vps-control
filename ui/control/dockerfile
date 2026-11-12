@@ -1,0 +1,22 @@
+FROM golang:1.26.9-alpine AS build
+ARG VERSION=dev
+WORKDIR /src
+COPY go.mod ./
+COPY *.go ./
+RUN CGO_ENABLED=0 GOOS=linux go vet ./... \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/awg_control .
+
+FROM scratch
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="awg-vps-control-control" \
+      org.opencontainers.image.source="https://github.com/khorevaa/awg-vps-control" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.awg-vps-control.component="control"
+COPY --from=build /out/awg_control /usr/local/bin/awg_control
+USER 10002:10001
+ENV AWG_CONTROL_SOCKET=/run/awg_vps_control/control.sock \
+    AWG_HOST_SOCKET=/run/awg_vps_adapter/adapter.sock \
+    AWG_CONTROL_STATE=/var/lib/awg_vps_control/control/state.json \
+    AWG_WEB_UID=10001
+HEALTHCHECK --interval=30s --timeout=8s --start-period=10s --retries=3 CMD ["/usr/local/bin/awg_control", "healthcheck"]
+ENTRYPOINT ["/usr/local/bin/awg_control"]

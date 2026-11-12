@@ -1,0 +1,71 @@
+name: Test and build
+
+on:
+  push:
+    branches: [develop, main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.9'
+          cache: false
+      - name: Check source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(gofmt -l ui/web/*.go ui/control/*.go)"
+          for module in web control; do (cd "ui/$module" && go vet ./... && go test ./...); done
+          node --check ui/web/app/static/app.js
+          while IFS= read -r -d '' script; do bash -n "$script"; done < <(git ls-files -z '*.sh')
+      - name: Build release and verify images
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/build_release.sh dist/release
+          (cd dist/release && sha256sum --check manifest.sha256)
+          sudo dist/release/bin/awg_control install-tools verify-release dist/release
+          for component in web control; do
+            runtime_user=10001:10001
+            if [[ $component == control ]]; then runtime_user=10002:10001; fi
+            docker build --network=none -f dist/release/scripts/runtime_dockerfile --build-arg "COMPONENT=$component" --build-arg "RUNTIME_USER=$runtime_user" --build-arg "VERSION=$(cat version)" --build-arg "REVISION=$GITHUB_SHA" -t "awg_vps_$component:ci" dist/release
+            test "$(docker run --rm --network=none "awg_vps_$component:ci" version)" = "$(cat version)"
+          done
+          tar -C dist -czf dist/awg_vps_control_linux_amd64.tar.gz release
+          (cd dist && sha256sum awg_vps_control_linux_amd64.tar.gz > awg_vps_control_linux_amd64.tar.gz.sha256)
+      - name: Check installer and container readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo bash dist/release/install.sh dist/release
+          sudo awg-vps-control healthcheck
+          sudo awg-vps-control ui-status
+          sudo awg-vps-control restart
+          sudo awg-vps-control healthcheck
+          allowed_host=$(sudo awk -F= '$1 == "AWG_ALLOWED_HOST" { print $2 }' /etc/awg_vps_control/ui.env)
+          status=$(sudo curl --silent --show-error --unix-socket /run/awg_vps_web/web.sock --header "Host: $allowed_host" --output /dev/null --write-out '%{http_code}' http://localhost/api/v1/health)
+          [[ $status == 200 ]]
+          status=$(sudo curl --silent --show-error --unix-socket /run/awg_vps_web/web.sock --header "Host: $allowed_host" --output /dev/null --write-out '%{http_code}' http://localhost/api/v1/overview)
+          [[ $status == 401 ]]
+          sudo awg-vps-control uninstall-ui
+          sudo systemctl is-active --quiet awg_vps_warp.service
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: awg_vps_control_linux_amd64
+          path: |
+            dist/awg_vps_control_linux_amd64.tar.gz
+            dist/awg_vps_control_linux_amd64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>AWG · Управление VPS</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div id="login-screen" class="login-screen">
+    <form id="login-form" class="login-card">
+      <div class="brand-mark">A</div><p class="eyebrow">ЛИЧНЫЙ VPN-СЕРВЕР</p>
+      <h1>Управление AWG</h1><p class="muted">Закрытая панель вашего VPS. Подключитесь через SSH-туннель и введите секрет доступа.</p>
+      <label for="access-secret">Секрет доступа</label>
+      <input id="access-secret" name="secret" type="password" autocomplete="current-password" minlength="43" maxlength="256" required spellcheck="false">
+      <p id="login-error" class="error-message" role="alert"></p>
+      <button id="login-submit" class="button primary" type="submit">Войти в панель <span aria-hidden="true">→</span></button>
+      <p class="login-foot">Секрет можно получить командой <code>awg-vps-control ui-access</code> на сервере.</p>
+    </form>
+  </div>
+
+  <div id="application" class="layout" hidden>
+    <aside class="sidebar">
+      <a href="#overview" class="brand"><span class="brand-mark small">A</span><span>AWG <strong>Control</strong><small>Личный VPS</small></span></a>
+      <p class="nav-label">УПРАВЛЕНИЕ</p>
+      <nav aria-label="Основная навигация">
+        <a href="#overview" data-view="overview" class="nav-link active"><span aria-hidden="true">◫</span>Обзор</a>
+        <a href="#discovery" data-view="discovery" class="nav-link"><span aria-hidden="true">⌕</span>Подключение сервера</a>
+        <a href="#peers" data-view="peers" class="nav-link"><span aria-hidden="true">♙</span>Клиенты AWG</a>
+        <a href="#warp" data-view="warp" class="nav-link"><span aria-hidden="true">⇄</span>WARP и маршруты</a>
+        <a href="#configuration" data-view="configuration" class="nav-link"><span aria-hidden="true">≡</span>Конфигурация</a>
+        <a href="#operations" data-view="operations" class="nav-link"><span aria-hidden="true">◷</span>Операции</a>
+        <a href="#logs" data-view="logs" class="nav-link"><span aria-hidden="true">▤</span>Журналы</a>
+      </nav>
+      <div class="sidebar-bottom"><span class="connection-dot"></span> Доступ через SSH <button id="theme-toggle" class="icon-button" aria-label="Переключить тему" title="Переключить тему">◐</button></div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar"><div><span class="breadcrumb">VPS /</span> <span id="page-title">Обзор</span></div><div class="topbar-actions"><span id="session-expiry" class="muted"></span><button id="logout" class="button subtle">Выйти</button></div></header>
+      <main>
+        <div class="page-heading"><div><p class="eyebrow">AWG VPS CONTROL</p><h1 id="section-title">Состояние сервера</h1><p id="section-description" class="muted">Установка AWG, маршрут трафика и состояние VPS.</p></div><button id="refresh" class="button">↻ Обновить</button></div>
+        <div id="global-error" class="notice danger" role="alert" hidden></div>
+        <div id="loading" class="loading" role="status" hidden>Загружаем данные сервера…</div>
+
+        <section data-panel="overview">
+          <div class="status-strip"><div><span class="connection-dot"></span><strong id="server-hostname">Сервер не определён</strong><span id="attachment-status" class="pill neutral">Неизвестно</span></div><span id="observed-at" class="muted">Нет снимка</span></div>
+          <div class="stats-grid">
+            <article class="card stat-card"><p class="card-label">Выход клиентского трафика</p><div id="egress-path" class="stat-value">—</div><p id="egress-message" class="muted">Путь не проверен</p><small id="egress-verified" class="muted">Успешной проверки пока нет</small></article>
+            <article class="card stat-card"><p class="card-label">AmneziaWG</p><div id="awg-status" class="stat-value">—</div><p id="awg-installation" class="muted">Установка не подключена</p><button id="restart-awg" class="text-button danger-text" disabled>Перезапустить AWG…</button></article>
+            <article class="card stat-card"><p class="card-label">WARP</p><div id="warp-status" class="stat-value">—</div><p id="warp-policy-summary" class="muted">Политика не прочитана</p><a href="#warp" class="text-button">Настроить выход →</a></article>
+          </div>
+          <div class="two-columns">
+            <article class="card"><div class="card-heading"><h2>Ресурсы VPS</h2><span class="pill neutral">Снимок</span></div><dl class="details"><div><dt>Время работы</dt><dd id="vps-uptime">—</dd></div><div><dt>Средняя нагрузка</dt><dd id="vps-load">—</dd></div><div><dt>Память, доступно / всего</dt><dd id="vps-memory">—</dd></div><div><dt>Диск, свободно / всего</dt><dd id="vps-disk">—</dd></div></dl></article>
+            <article class="card"><div class="card-heading"><h2>Проверки подключения</h2><button id="run-diagnostics" class="button small-button">Проверить сейчас</button></div><p class="muted">Служба, туннель, маршруты, HTTPS и DNS проверяются отдельно.</p><div id="overview-checks" class="checks"><p class="empty">Проверки ещё не выполнялись.</p></div></article>
+          </div>
+        </section>
+
+        <section data-panel="discovery" hidden>
+          <article class="card"><div class="card-heading"><h2>Существующие установки</h2><button id="discover" class="button">Найти установки</button></div><p class="muted">Выберите контейнер AWG и его сеть. Подключение панели не устанавливает AWG и не заменяет его ключи.</p><div id="discovery-dependencies" class="checks"></div><form id="attach-form"><label for="candidate">Контейнер AWG</label><select id="candidate" required><option value="">Сначала выполните обнаружение</option></select><p id="candidate-reason" class="muted"></p><label for="docker-network">Docker-сеть</label><select id="docker-network" required><option value="">Выберите установку</option></select><label for="dns-container">Контейнер DNS, если используется</label><input id="dns-container" placeholder="Имя существующего контейнера" maxlength="128" spellcheck="false"><div class="form-actions"><button id="attach-submit" class="button primary" type="submit" disabled>Подключить установку…</button></div></form></article>
+        </section>
+
+        <section data-panel="peers" hidden>
+          <article class="card"><div class="card-heading"><h2>Клиенты AWG <span id="peers-count" class="count">0</span></h2><input id="peer-search" class="search" type="search" placeholder="Имя, IP или публичный ключ" aria-label="Поиск клиентов"></div><p class="muted">Список читается из Amnezia. Отсутствие свежего handshake само по себе не означает неисправность клиента.</p><div class="table-scroll"><table><thead><tr><th>Клиент / публичный ключ</th><th>Адреса</th><th>Endpoint</th><th>Последний handshake</th><th>Получено / отправлено</th></tr></thead><tbody id="peers-body"></tbody></table></div><p id="peers-empty" class="empty" hidden>Клиенты не найдены.</p><div class="pagination"><button id="peers-prev" class="button small-button">← Назад</button><span id="peers-page" class="muted">1 / 1</span><button id="peers-next" class="button small-button">Далее →</button></div><p class="footnote">В этом выпуске доступен просмотр. Создание, переименование и отзыв появятся отдельным этапом.</p></article>
+        </section>
+
+        <section data-panel="warp" hidden>
+          <div id="policy-unconfigured" class="notice warning" hidden>Выберите режим выхода. Отсутствие сохранённой политики не означает, что прямой выход разрешён.</div>
+          <div class="two-columns"><article class="card"><h2>Политика выхода</h2><form id="policy-form"><label class="check-label"><input id="warp-enabled" type="checkbox"><span><strong>Использовать WARP</strong><small>Клиентский трафик направляется через проверенный WARP-туннель.</small></span></label><label class="check-label"><input id="allow-direct" type="checkbox"><span><strong>Разрешить прямой выход при отказе WARP</strong><small>Общее разрешение для всех клиентов и DNS. По умолчанию выключено.</small></span></label><p class="notice">После восстановления WARP весь трафик вернётся в туннель. Существующие соединения при переключении могут оборваться.</p><p id="policy-revision" class="footnote mono">Политика не загружена</p><div class="form-actions"><button id="policy-submit" class="button primary" type="submit" disabled>Сохранить политику…</button></div></form></article><article class="card"><h2>Обслуживание WARP</h2><p class="muted">WARP необязателен. Его установка запускается отдельно и не включает разрешение прямого выхода.</p><p id="warp-setup-guidance" class="notice">Для первой установки сначала сохраните режим без WARP: оставьте «Использовать WARP» выключенным. Затем установите WARP и включите его в политике.</p><div class="action-list"><button id="setup-warp" class="button" aria-describedby="warp-setup-guidance" disabled>Установить / настроить WARP…</button><button id="reconnect-warp" class="button">Переподключить WARP…</button><button id="repair" class="button">Восстановить правила и маршруты…</button></div><p class="footnote">Восстановление работает с ресурсами панели и WARP. AWG автоматически не перезапускается.</p></article></div>
+          <article class="card"><div class="card-heading"><h2>Диагностика пути</h2><button id="warp-diagnostics" class="button small-button">Проверить сейчас</button></div><div id="warp-checks" class="checks"><p class="empty">Проверки ещё не выполнялись.</p></div></article>
+        </section>
+
+        <section data-panel="configuration" hidden>
+          <article class="card"><div class="card-heading"><h2 id="configuration-name">Конфигурация AWG</h2><span class="pill neutral">Только чтение</span></div><p class="muted">Секретные значения скрыты. Этот снимок предназначен для диагностики и не является резервной копией.</p><div id="configuration-revision" class="footnote mono">Нет снимка</div><pre id="configuration-content" class="code-view">Конфигурация ещё не загружена.</pre></article>
+        </section>
+
+        <section data-panel="operations" hidden>
+          <div id="operation-uncertain" class="notice warning" hidden><span id="operation-uncertain-message"></span><button id="retry-operation" class="button small-button">Повторить с тем же ключом</button></div>
+          <article class="card"><div class="card-heading"><h2>История операций</h2><span id="operations-updated" class="muted">Нет снимка</span></div><p class="muted">Принятый запрос ещё не означает успешное изменение. Итог появляется после проверки Control.</p><div class="table-scroll"><table><thead><tr><th>Действие</th><th>Состояние</th><th>Создана</th><th>Обновлена</th><th></th></tr></thead><tbody id="operations-body"></tbody></table></div><p id="operations-empty" class="empty">Операций пока нет.</p></article>
+          <article id="operation-details-card" class="card" hidden><div class="card-heading"><h2>Подробности операции</h2><span id="operation-status" class="pill neutral"></span></div><p id="operation-identity" class="footnote mono"></p><pre id="operation-result" class="code-view"></pre></article>
+        </section>
+
+        <section data-panel="logs" hidden>
+          <article class="card"><div class="card-heading"><h2>Журнал сервера</h2><div class="inline-controls"><label for="log-source" class="sr-only">Источник</label><select id="log-source"><option value="awg">AWG</option><option value="dns">DNS</option><option value="warp">WARP</option><option value="supervisor">Восстановление</option><option value="bridge">Host bridge</option></select><label for="log-limit" class="sr-only">Число строк</label><select id="log-limit"><option value="50">50 строк</option><option value="100" selected>100 строк</option><option value="200">200 строк</option></select><button id="load-logs" class="button small-button">Загрузить</button></div></div><p id="logs-metadata" class="muted">Журнал ещё не загружен.</p><pre id="logs-content" class="code-view logs-view">Выберите источник журнала.</pre></article>
+        </section>
+      </main>
+      <footer>AWG VPS Control <span>Закрытая панель · существующая установка AmneziaWG</span></footer>
+    </div>
+  </div>
+  <dialog id="confirmation"><form method="dialog"><p class="eyebrow">ПОДТВЕРЖДЕНИЕ</p><h2 id="confirmation-title"></h2><p id="confirmation-message"></p><div class="form-actions"><button class="button" value="cancel">Отмена</button><button id="confirmation-submit" class="button primary" value="confirm">Продолжить</button></div></form></dialog>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+</body>
+</html>

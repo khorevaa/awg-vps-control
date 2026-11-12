@@ -1,0 +1,110 @@
+# Управляющий скрипт
+
+`awg_vps_control.sh` — самостоятельный менеджер панели: цветное меню с версией, пошаговое подключение существующего AWG, управление доступом, политикой WARP и жизненным циклом приложения. В checkout он использует соседний каталог `scripts`; установленная команда `/usr/local/bin/awg-vps-control` разрешает ссылку на менеджер текущего выпуска в `/opt/awg_vps_control/current`. Менеджер вызывает именованные операции `scripts/awg_vps_control.sh`; проверка ревизий, Unix IPC и изменения состояния остаются в runtime.
+
+```bash
+# На VPS: установить заранее собранный и доставленный bundle.
+sudo bash awg_vps_control.sh install-ui /root/awg_vps_release/release
+
+# После установки открыть меню либо выполнить конкретное действие.
+sudo awg-vps-control
+sudo awg-vps-control status
+sudo awg-vps-control doctor
+sudo awg-vps-control help
+```
+
+Меню возвращается после выполненного действия или ошибки и показывает её код. После успешной установки, обновления или отката менеджер заново запускается через установленную команду, чтобы версия и команды меню соответствовали выбранному выпуску. `help` и `version` доступны без root; команды runtime требуют root. Цвет используется только в терминале, `NO_COLOR=1` его отключает. Перед изменениями из меню показываются подтверждения. Явная CLI-команда с параметрами выполняется без дополнительного подтверждения; для ручного `restart-awg` предусмотрен диалог либо обязательный `--confirm` без терминала.
+
+## Подключение и политика
+
+```bash
+sudo awg-vps-control discover
+sudo awg-vps-control attach
+# Или явно указать обнаруженные имя, сеть и необязательный DNS-контейнер:
+sudo awg-vps-control attach AWG_CONTAINER DOCKER_NETWORK DNS_CONTAINER
+sudo awg-vps-control clients
+sudo awg-vps-control policy
+```
+
+`attach` показывает обнаруженные контейнеры и сети, спрашивает имя существующего AWG, общую Docker-сеть и DNS-контейнер. Его можно оставить пустым. Runtime повторно проверяет выбранную установку и сохраняет её идентификаторы и ревизию; штатные файлы Amnezia и VPN-пользователи не меняются. В первом выпуске `clients` только читает существующих клиентов.
+
+Интерактивная `policy` перечитывает текущую ревизию и предлагает выбрать режим выхода и разрешение прямого выхода при отказе WARP. Конфликт ревизий останавливает сохранение. При первой настройке сначала явно сохраните работу без WARP, затем при необходимости выполните `setup-warp` и снова откройте `policy`, чтобы включить WARP. Установка WARP — отдельное явное действие; разрешение автоматического прямого выхода по умолчанию выключено.
+
+```bash
+sudo awg-vps-control setup-warp
+sudo awg-vps-control reconnect-warp
+sudo awg-vps-control repair
+sudo awg-vps-control restart-awg --confirm
+```
+
+`repair` работает с собственными маршрутами, правилами и WARP. `restart-awg` отдельно перезапускает существующий AWG и прерывает подключения клиентов. Менеджер не устанавливает и не обновляет AWG.
+
+## Доступ, состояние и контейнеры
+
+| Команда | Назначение |
+| --- | --- |
+| `status`, `doctor`, `settings`, `logs`, `clients` | Читаемый вывод; `--json` возвращает исходный ответ API |
+| `ui-status` | Состояние трёх контейнеров панели |
+| `healthcheck` | Проверка цепочки Web → Control → Adapter → WARP и Docker API |
+| `ui-access [user@vps]` | URL панели, секрет входа и команда SSH-туннеля |
+| `rotate-ui-access` | Новый секрет и отзыв всех сессий панели |
+| `start`, `stop`, `restart` | Только Web, Control и Adapter |
+| `rollback-ui` | Предыдущий выпуск приложения с проверкой работоспособности |
+| `uninstall-ui` | Удаление только трёх контейнеров панели |
+
+При остановке или удалении UI остаются WARP agent/supervisor, boot guard, сохранённое состояние и существующий AWG. Это позволяет продолжить выбранную сетевую политику. `ui-access` намеренно печатает секрет в терминал; не сохраняйте такой вывод в общедоступных журналах.
+
+WARP работает **на хосте**: официальный клиент запускается службой `warp-svc.service`, проектные `awg_vps_warp.service` и `awg_vps_guard.service` отвечают за управление и раннюю защиту. В Docker находятся Web, Control и Adapter. Adapter обращается к Docker API и хостовому WARP agent через Unix socket; WARP-клиента внутри него нет.
+
+## Установка и обновление выпуска
+
+`install-ui` и `update-ui` принимают каталог собранного выпуска, конкретный версионный тег или `latest`. В диалоге источник запрашивается; без диалога по умолчанию используется `AWG_UI_VERSION`, затем `latest`.
+
+```bash
+sudo awg-vps-control update-ui /root/new_release/release
+sudo awg-vps-control update-ui v0.1.0
+sudo awg-vps-control update-manager v0.1.0
+```
+
+Теги в примерах показывают формат; наличие конкретного выпуска необходимо проверить в [GitHub Releases](https://github.com/khorevaa/awg-vps-control/releases). Если выпусков ещё нет, используйте локальный bundle по [инструкции сборки](operations_guide.md). Загрузчик сообщает ошибку отсутствующего/недоступного release и не переключается на код из `develop`, `main` или raw URL.
+
+`update-manager [тег|latest]` обновляет менеджер **вместе с согласованными runtime и UI** через ту же транзакцию установки. Все эти файлы входят в один manifest; замена одного скрипта внутри установленного выпуска нарушила бы его целостность. Для локальной сборки используется `update-ui`. Откат приложения не откатывает сетевую политику или состояние WARP.
+
+`scripts/download_release.sh` берёт только `awg_vps_control_linux_amd64.tar.gz` и его `.sha256` из опубликованных releases `khorevaa/awg-vps-control`. `latest` сначала разрешается в конкретный версионный тег через официальный GitHub API. Разрешён только HTTPS, включая перенаправления на хранилище GitHub. До распаковки сверяется SHA-256; проверяются имена и типы каждого элемента архива. Абсолютные пути, переходы `..`, дубликаты, ссылки и специальные файлы отклоняются. Распаковка выполняется в новый закрытый каталог без наследования владельцев; версия bundle должна совпадать с тегом. Затем запускается `release/install.sh`, который проверяет полный manifest и выполняет установку. Временная загрузка менеджера удаляется и при ошибке.
+
+SHA-256 проверяет целостность полученного артефакта; источником доверия остаются официальный репозиторий и HTTPS. Подписи издателя или гарантия GitHub Immutable Releases этим механизмом не заявляются. Выпуск адресуется конкретным тегом, mutable-ветки не исполняются.
+
+## Режим без диалогов
+
+`AWG_VPS_NONINTERACTIVE=1` или отсутствие терминала отключают вопросы. Без именованной команды менеджер завершается с ошибкой использования. Для `attach` можно явно передать аргументы либо задать `AWG_CONTAINER`, `AWG_DOCKER_NETWORK`, `AWG_DNS_CONTAINER`; SSH-подсказка принимает `AWG_SSH_TARGET`.
+
+```bash
+sudo env AWG_VPS_NONINTERACTIVE=1 awg-vps-control status --json
+sudo env AWG_VPS_NONINTERACTIVE=1 awg-vps-control policy --json
+sudo env AWG_VPS_NONINTERACTIVE=1 awg-vps-control attach AWG_CONTAINER DOCKER_NETWORK
+sudo env AWG_VPS_NONINTERACTIVE=1 awg-vps-control restart-awg --confirm
+sudo env AWG_VPS_NONINTERACTIVE=1 awg-vps-control install-ui /root/release
+```
+
+`policy` без аргументов в этом режиме только читает политику. Для сохранения передайте один JSON-аргумент с актуальной `expected_revision` по [API](api.md); `attach` также принимает JSON payload одним аргументом. Не заменяйте актуальную ревизию значением из старого примера.
+
+Псевдонимы: `install` → `install-ui`, `update` → `update-ui`, `rollback` → `rollback-ui`, `uninstall` → `uninstall-ui`, `peers` → `clients`, `access` → `ui-access`, `rotate` → `rotate-ui-access`, `start-ui`/`stop-ui`/`restart-ui`, `warp-setup`/`warp-reconnect`.
+
+## Ручное восстановление при остановленной панели
+
+Команды `repair`, `setup-warp`, `reconnect-warp`, `policy` и `settings` обращаются непосредственно к хостовой WARP-службе через проверенный root Unix socket. Они доступны и после `stop`/`uninstall-ui`, пока хостовая служба работает. Для обзора VPS, чтения клиентов, журналов и подключения AWG требуется контейнер Adapter; его запускает `start` вместе с панелью. Остановка панели не останавливает WARP и его защиту.
+
+## Соответствие исходному менеджеру ocserv-vps
+
+За основу взят [реальный `ocserv-vps.sh` в snapshot e05a4f9](https://github.com/khorevaa/ocserv-vps/blob/e05a4f9a3e11a6a5e7883b459ad921ac7bacc8e8/ocserv-vps.sh), включая разделение функций, а не только перечень пунктов меню.
+
+| В исходном проекте | В awg-vps-control |
+| --- | --- |
+| [`runtime_task`, определение runtime и `prompt_value`](https://github.com/khorevaa/ocserv-vps/blob/e05a4f9a3e11a6a5e7883b459ad921ac7bacc8e8/ocserv-vps.sh#L1-L60) | Разрешение ссылки/checkout, вызов именованного runtime, параметры и env для диалогов |
+| [`show_menu`](https://github.com/khorevaa/ocserv-vps/blob/e05a4f9a3e11a6a5e7883b459ad921ac7bacc8e8/ocserv-vps.sh#L434) | Версия и цветное меню, отдельные доступ, настройки, lifecycle и WARP; возврат после ошибки |
+| [`usage` и dispatch](https://github.com/khorevaa/ocserv-vps/blob/e05a4f9a3e11a6a5e7883b459ad921ac7bacc8e8/ocserv-vps.sh#L476) | Полная справка, CLI aliases, noninteractive режим и проверка аргументов |
+| [`update_manager`](https://github.com/khorevaa/ocserv-vps/blob/e05a4f9a3e11a6a5e7883b459ad921ac7bacc8e8/ocserv-vps.sh#L407) | Выбор опубликованного тега; дополнительно SHA-256, безопасный tar и общий bundle вместо raw installer |
+| `install-ui`, `update-ui`, `ui-access`, `rotate-ui-access`, `settings`, `start/stop/restart` | Отдельные команды с теми же ролями; lifecycle ограничен тремя контейнерами панели |
+| Установка/обновление VPN и изменение VPN-пользователей | Подключение существующего AWG и чтение клиентов; установка AWG и peer CRUD отсутствуют |
+
+Менеджер сохраняет общий способ работы исходного проекта, учитывая другие границы полномочий и формат существующей установки Amnezia.

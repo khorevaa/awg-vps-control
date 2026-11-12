@@ -1,0 +1,84 @@
+### Используйте тот же приватный environment, что и для web.http.
+### Эти запросы не меняют VPN; cookie явно не передаётся.
+
+### Неавторизованное чтение
+# @no-cookie-jar
+GET {{base_url}}/api/v1/overview
+
+> {%
+client.test("Без сессии", function () {
+    client.assert(response.status === 401, "статус ответа на запрос не 401");
+});
+%}
+
+### Неправильный Host
+# @no-cookie-jar
+GET {{base_url}}/api/v1/policy
+Host: invalid.localhost
+
+> {%
+client.test("Host", function () {
+    client.assert(response.status === 400, "статус ответа на запрос не 400");
+});
+%}
+
+### Неправильный Origin отклоняется до входа
+# @no-cookie-jar
+POST {{base_url}}/api/v1/access
+Origin: http://invalid.localhost
+Content-Type: application/json
+
+{"secret":"invalid"}
+
+> {%
+client.test("Origin", function () {
+    client.assert(response.status === 403, "статус ответа на запрос не 403");
+});
+%}
+
+### Вход для проверки CSRF
+# @no-cookie-jar
+POST {{base_url}}/api/v1/access
+Origin: {{origin}}
+Content-Type: application/json
+
+{"secret":"{{access_secret}}"}
+
+> {%
+client.test("Вход для CSRF", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+client.global.set("security_cookie", response.headers.valueOf("Set-Cookie").split(";")[0]);
+client.global.set("security_csrf", response.body.csrf_token);
+%}
+
+### Неправильный CSRF, операция не принимается
+# @no-cookie-jar
+POST {{base_url}}/api/v1/operations
+Origin: {{origin}}
+Cookie: {{security_cookie}}
+X-CSRF-Token: invalid
+Content-Type: application/json
+
+{"action":"repair","payload":{},"idempotency_key":"security_csrf_rejected"}
+
+> {%
+client.test("CSRF", function () {
+    client.assert(response.status === 403, "статус ответа на запрос не 403");
+});
+%}
+
+### Завершение временной сессии
+# @no-cookie-jar
+POST {{base_url}}/api/v1/auth/logout
+Origin: {{origin}}
+Cookie: {{security_cookie}}
+X-CSRF-Token: {{security_csrf}}
+
+> {%
+client.test("Завершение сессии", function () {
+    client.assert(response.status === 200, "статус ответа на запрос не 200");
+});
+client.global.clear("security_cookie");
+client.global.clear("security_csrf");
+%}
