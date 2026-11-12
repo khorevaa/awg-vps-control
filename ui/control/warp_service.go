@@ -58,13 +58,82 @@ func (s *WarpSession) warpProbe(ctx context.Context) bool {
 	if code, _ := s.optional(ctx, "ip", "link", "show", "dev", warpInterface); code != 0 {
 		return false
 	}
-	s.mutation(ctx, "warp.probe")
-	s.command(ctx, "ip", "-4", "route", "replace", "default", "dev", warpInterface, "metric", "10", "table", warpProbeTable)
+	ready := s.warpProbeRoute(ctx)
+	if s.Err == nil && !ready {
+		s.mutation(ctx, "warp.probe")
+		s.command(ctx, "ip", "-4", "route", "replace", "default", "dev", warpInterface, "metric", "10", "table", warpProbeTable)
+	}
 	if s.Err != nil {
 		return false
 	}
 	code, trace, _ := warpExecute(ctx, []string{"curl", "-4", "--silent", "--show-error", "--fail", "--noproxy", "*", "--interface", warpInterface, "--connect-timeout", "3", "--max-time", "6", warpProbeURL}, 8*time.Second, "", 8192, false)
 	return code == 0 && warpTracePattern.MatchString(trace)
+}
+
+// warpProbeRoute распознаёт собственный готовый маршрут без сдвига границы SSH-подтверждения.
+func (s *WarpSession) warpProbeRoute(ctx context.Context) bool {
+	value := s.jsonCommand(ctx, "ip", "-4", "-j", "route", "show", "table", warpProbeTable, "exact", "default")
+	if s.Err != nil {
+		return false
+	}
+	routes, ok := value.([]any)
+	if !ok {
+		s.fail("invalid_system_state", "Не удалось проверить маршрут WARP-пробы.", 502)
+		return false
+	}
+	ready := false
+	for _, value := range routes {
+		route, ok := value.(map[string]any)
+		if !ok || route["dst"] != "default" {
+			s.fail("invalid_system_state", "Не удалось проверить маршрут WARP-пробы.", 502)
+			return false
+		}
+		exact := true
+		for key, value := range route {
+			valid := false
+			switch key {
+			case "dst", "type", "dev", "scope", "protocol", "gateway", "prefsrc":
+				_, valid = value.(string)
+			case "metric", "nhid":
+				number, numeric := value.(float64)
+				valid = numeric && number >= 0 && number <= 4294967295 && number == float64(uint32(number))
+			case "table":
+				valid = value == warpProbeTable || value == float64(43002)
+			case "flags":
+				flags, array := value.([]any)
+				valid = array
+				for _, flag := range flags {
+					if _, text := flag.(string); !text {
+						valid = false
+					}
+				}
+				exact = exact && len(flags) == 0
+			case "multipath", "nexthops":
+				_, valid = value.([]any)
+			case "via", "encap":
+				_, valid = value.(map[string]any)
+			}
+			if !valid {
+				s.fail("invalid_system_state", "Неизвестный формат маршрута WARP-пробы.", 502)
+				return false
+			}
+			switch key {
+			case "gateway", "multipath", "nexthops", "nhid", "via", "encap", "prefsrc":
+				exact = false
+			}
+		}
+		kind := warpString(route["type"])
+		switch kind {
+		case "", "unicast", "unreachable", "blackhole", "prohibit", "throw", "local", "broadcast", "multicast", "nat", "anycast":
+		default:
+			s.fail("invalid_system_state", "Неизвестный тип маршрута WARP-пробы.", 502)
+			return false
+		}
+		if exact && (kind == "" || kind == "unicast") && route["dev"] == warpInterface && route["scope"] == "link" && route["metric"] == float64(10) {
+			ready = true
+		}
+	}
+	return ready
 }
 
 // pathProbe подтверждает HTTPS и UDP DNS из клиентской подсети без изменения peers.

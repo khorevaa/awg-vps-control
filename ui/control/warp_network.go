@@ -215,6 +215,8 @@ func (s *WarpSession) prepareAdmin(ctx context.Context) {
 		return
 	}
 	m := s.Manifest
+	// WARP выбирает свой приоритет перед первым правилом; probe должен существовать уже при boot guard.
+	s.ensureRule(ctx, 4, 40, "oif", warpInterface, "lookup", warpProbeTable)
 	s.ensureRule(ctx, 4, 41, "iif", "lo", "lookup", "main")
 	s.ensureRule(ctx, 6, 41, "iif", "lo", "lookup", "main")
 	for index, address := range m.AWGIPs {
@@ -257,7 +259,6 @@ func (s *WarpSession) configureHost(ctx context.Context, path string) {
 	for _, network := range m.Networks {
 		s.command(ctx, "ip", "-4", "route", "replace", network.Subnet, "dev", network.Bridge, "scope", "link", "table", warpTable)
 	}
-	s.ensureRule(ctx, 4, 40, "oif", warpInterface, "lookup", warpProbeTable)
 	s.ensureRule(ctx, 4, 42, "to", m.ClientNetwork, "lookup", "main")
 	s.ensureRule(ctx, 4, 43, "iif", warpLaneHost, "lookup", warpTable)
 	if m.DNSIP != "" {
