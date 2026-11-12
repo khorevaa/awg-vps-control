@@ -27,7 +27,6 @@
       <p class="nav-label">УПРАВЛЕНИЕ</p>
       <nav aria-label="Основная навигация">
         <a href="#overview" data-view="overview" class="nav-link active"><span aria-hidden="true">◫</span>Обзор</a>
-        <a href="#discovery" data-view="discovery" class="nav-link"><span aria-hidden="true">⌕</span>Подключение сервера</a>
         <a href="#peers" data-view="peers" class="nav-link"><span aria-hidden="true">♙</span>Клиенты AWG</a>
         <a href="#warp" data-view="warp" class="nav-link"><span aria-hidden="true">⇄</span>WARP и маршруты</a>
         <a href="#configuration" data-view="configuration" class="nav-link"><span aria-hidden="true">≡</span>Конфигурация</a>
@@ -54,10 +53,6 @@
             <article class="card"><div class="card-heading"><h2>Ресурсы VPS</h2><span class="pill neutral">Снимок</span></div><dl class="details"><div><dt>Время работы</dt><dd id="vps-uptime">—</dd></div><div><dt>Средняя нагрузка</dt><dd id="vps-load">—</dd></div><div><dt>Память, доступно / всего</dt><dd id="vps-memory">—</dd></div><div><dt>Диск, свободно / всего</dt><dd id="vps-disk">—</dd></div></dl></article>
             <article class="card"><div class="card-heading"><h2>Проверки подключения</h2><button id="run-diagnostics" class="button small-button">Проверить сейчас</button></div><p class="muted">Служба, туннель, маршруты, HTTPS и DNS проверяются отдельно.</p><div id="overview-checks" class="checks"><p class="empty">Проверки ещё не выполнялись.</p></div></article>
           </div>
-        </section>
-
-        <section data-panel="discovery" hidden>
-          <article class="card"><div class="card-heading"><h2>Существующие установки</h2><button id="discover" class="button">Найти установки</button></div><p class="muted">Выберите контейнер AWG и его сеть. Подключение панели не устанавливает AWG и не заменяет его ключи.</p><div id="discovery-dependencies" class="checks"></div><form id="attach-form"><label for="candidate">Контейнер AWG</label><select id="candidate" required><option value="">Сначала выполните обнаружение</option></select><p id="candidate-reason" class="muted"></p><label for="docker-network">Docker-сеть</label><select id="docker-network" required><option value="">Выберите установку</option></select><label for="dns-container">Контейнер DNS, если используется</label><input id="dns-container" placeholder="Имя существующего контейнера" maxlength="128" spellcheck="false"><div class="form-actions"><button id="attach-submit" class="button primary" type="submit" disabled>Подключить установку…</button></div></form></article>
         </section>
 
         <section data-panel="peers" hidden>

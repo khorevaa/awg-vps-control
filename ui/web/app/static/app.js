@@ -2,17 +2,17 @@
 
 (() => {
   const el = (id) => document.getElementById(id);
-  const state = { authenticated: false, csrf: "", view: "overview", peers: [], peerPage: 1, candidates: [], policy: null, policyDirty: false, policyLoadID: 0, operations: [], selectedOperation: "", pendingRequest: null, submitting: false, loading: false, polling: false };
+  const state = { authenticated: false, csrf: "", view: "overview", peers: [], peerPage: 1, policy: null, policyDirty: false, policyLoadID: 0, operations: [], selectedOperation: "", pendingRequest: null, submitting: false, loading: false, polling: false };
   const views = {
     overview: ["Обзор", "Состояние сервера", "Установка AWG, маршрут трафика и состояние VPS."],
-    discovery: ["Подключение сервера", "Подключение установки", "Выбор существующего контейнера AmneziaWG и его сети."],
     peers: ["Клиенты AWG", "Клиенты AWG", "Родные данные Amnezia и наблюдаемое состояние подключений."],
     warp: ["WARP и маршруты", "Выход в интернет", "Политика WARP, проверка маршрутов и восстановление."],
     configuration: ["Конфигурация", "Конфигурация AWG", "Текущая конфигурация с маскированными секретами."],
     operations: ["Операции", "Операции и восстановление", "Принятые действия, ход выполнения и проверенный результат."],
     logs: ["Журналы", "Журналы сервера", "Ограниченные снимки журналов выбранного компонента."]
   };
-  const actionNames = { attach: "Подключение установки", "policy.set": "Изменение политики", repair: "Восстановление маршрутов", "warp.setup": "Настройка WARP", "warp.reconnect": "Переподключение WARP", "awg.restart": "Ручной перезапуск AWG" };
+  const actionNames = { attach: "Подключение AWG", "policy.set": "Изменение политики", repair: "Восстановление маршрутов", "warp.setup": "Настройка WARP", "warp.reconnect": "Переподключение WARP", "awg.restart": "Ручной перезапуск AWG" };
+  const installationGuidance = "Установка AWG не подключена. На сервере выполните: sudo awg-vps-control attach.";
   const operationStatuses = { queued: ["В очереди", "neutral"], running: ["Выполняется", "running"], verifying: ["Проверка результата", "running"], succeeded: ["Выполнена", "ok"], rolling_back: ["Восстановление", "warning"], rolled_back: ["Отменена с откатом", "warning"], failed: ["Ошибка", "error"], manual_recovery_required: ["Требуется восстановление", "error"] };
   const terminalStatuses = new Set(["succeeded", "rolled_back", "failed", "manual_recovery_required"]);
   const value = (input, fallback = "—") => input === null || input === undefined || input === "" ? fallback : String(input);
@@ -57,11 +57,11 @@
     el("toasts").append(node); setTimeout(() => node.remove(), 6500);
   }
   function showError(error) {
-    el("global-error").textContent = error.message || "Не удалось получить данные. Состояние сервера неизвестно.";
+    el("global-error").textContent = error.code === "not_attached" ? installationGuidance : error.message || "Не удалось получить данные. Состояние сервера неизвестно.";
     el("global-error").hidden = false;
   }
   function signedOut(message = "") {
-    state.authenticated = false; state.csrf = ""; state.peers = []; state.candidates = []; state.operations = []; state.policy = null; state.policyDirty = false; state.pendingRequest = null; state.selectedOperation = "";
+    state.authenticated = false; state.csrf = ""; state.peers = []; state.operations = []; state.policy = null; state.policyDirty = false; state.pendingRequest = null; state.selectedOperation = "";
     state.policyLoadID++; el("setup-warp").disabled = true;
     el("application").hidden = true; el("login-screen").hidden = false; el("login-error").textContent = message;
     el("peers-body").replaceChildren(); el("operations-body").replaceChildren(); text("configuration-content", "Сессия завершена."); text("logs-content", "Сессия завершена.");
@@ -139,7 +139,7 @@
     text("egress-message", egress.message || "Проверка фактического пути не выполнена"); text("egress-verified", `Проверено: ${dateTime(egress.verified_at)}`);
     text("awg-status", componentStatus(data.awg, "awg")); text("warp-status", componentStatus(data.warp, "warp"));
     const installation = data.installation || {};
-    text("awg-installation", data.attached ? `${value(installation.container_name)} · ${value(installation.interface)}` : "Выберите установку в разделе подключения");
+    text("awg-installation", data.attached ? `${value(installation.container_name)} · ${value(installation.interface)}` : installationGuidance);
     el("restart-awg").disabled = !data.attached || installation.supported !== true;
     text("warp-policy-summary", policy.configured !== true ? "Выберите режим выхода" : policy.warp_enabled ? (policy.allow_direct_without_warp ? "WARP с разрешённым fallback" : "WARP без прямого fallback") : "WARP явно не используется");
     text("vps-uptime", uptime(data.uptime_seconds)); text("vps-load", Array.isArray(data.load_average) ? data.load_average.map((n) => Number(n).toFixed(2)).join(" / ") : "—");
@@ -151,29 +151,6 @@
     const data = await api("/diagnostics"); renderChecks("overview-checks", data.checks); renderChecks("warp-checks", data.checks);
     toast(`Проверки обновлены: ${dateTime(data.observed_at)}`);
   }
-  function addOption(select, textValue, optionValue, disabled = false) { const option = document.createElement("option"); option.textContent = textValue; option.value = optionValue; option.disabled = disabled; select.append(option); }
-  async function loadDiscovery() {
-    const data = await api("/discovery"); state.candidates = Array.isArray(data.candidates) ? data.candidates : [];
-    renderChecks("discovery-dependencies", data.dependencies); const select = el("candidate"); select.replaceChildren();
-    addOption(select, state.candidates.length ? "Выберите существующий контейнер" : "Поддерживаемые установки не найдены", "");
-    state.candidates.forEach((candidate, index) => addOption(select, `${value(candidate.container_name)}${candidate.supported !== true ? " · только диагностика" : ""}`, String(index)));
-    candidateChanged();
-  }
-  function candidateChanged() {
-    const candidate = state.candidates[Number(el("candidate").value)], hasSelection = el("candidate").value !== "";
-    const network = el("docker-network"); network.replaceChildren(); addOption(network, "Выберите обнаруженную сеть", "");
-    const supported = hasSelection && candidate && candidate.supported === true;
-    text("candidate-reason", hasSelection && candidate ? candidate.reason || `${value(candidate.interface)} · ${value(candidate.config_path)}` : "Контейнер и сеть выбираются явно.");
-    if (hasSelection && candidate) { for (const item of candidate.networks || []) { const name = typeof item === "string" ? item : item.name; if (name) addOption(network, name, name); } }
-    el("dns-container").value = hasSelection && candidate ? candidate.dns_container_name || "" : "";
-    el("attach-submit").disabled = !supported; network.disabled = !supported;
-  }
-  el("candidate").addEventListener("change", candidateChanged);
-  el("attach-form").addEventListener("submit", async (event) => {
-    event.preventDefault(); const candidate = state.candidates[Number(el("candidate").value)];
-    if (!candidate || !el("docker-network").value) return;
-    await confirmedOperation("attach", { container_name: candidate.container_name, dns_container_name: el("dns-container").value.trim(), docker_network: el("docker-network").value }, "Подключить установку", `Подключить ${candidate.container_name} к панели через сеть ${el("docker-network").value}? AWG не будет установлен или пересоздан.`);
-  });
   async function loadPeers() { const data = await api("/peers"); if (!Array.isArray(data)) throw new Error("Получен некорректный список клиентов."); state.peers = data; renderPeers(); }
   function renderPeers() {
     const query = el("peer-search").value.toLocaleLowerCase("ru"), rows = state.peers.filter((peer) => [peer.name, peer.public_key, ...(peer.allowed_ips || [])].join(" ").toLocaleLowerCase("ru").includes(query));
@@ -280,7 +257,7 @@
     if (operation.error) text("operation-result", `${value(operation.error.message, "Операция завершилась с ошибкой.")}\nКод: ${value(operation.error.code)}${operation.status === "manual_recovery_required" ? "\nТребуется проверка по SSH. Повторный перезапуск AWG автоматически не выполняется." : ""}`);
     else text("operation-result", operation.result === null || operation.result === undefined ? "Итоговый результат ещё не получен." : JSON.stringify(operation.result, null, 2));
   }
-  const tasks = { overview: loadOverview, discovery: loadDiscovery, peers: loadPeers, warp: loadPolicy, configuration: loadConfiguration, operations: loadOperations, logs: loadLogs };
+  const tasks = { overview: loadOverview, peers: loadPeers, warp: loadPolicy, configuration: loadConfiguration, operations: loadOperations, logs: loadLogs };
   async function runWithError(task) { try { await task(); } catch (error) { showError(error); } }
   async function loadView() {
     if (!state.authenticated) return;
@@ -298,7 +275,6 @@
   }
   window.addEventListener("hashchange", changeView);
   el("refresh").addEventListener("click", loadView);
-  el("discover").addEventListener("click", () => runWithError(loadDiscovery));
   el("run-diagnostics").addEventListener("click", () => runWithError(loadDiagnostics));
   el("warp-diagnostics").addEventListener("click", () => runWithError(loadDiagnostics));
   el("load-logs").addEventListener("click", () => runWithError(loadLogs));
