@@ -94,6 +94,20 @@ update_manager() {
     install_bundle update-manager "$tag"
 }
 
+# Отдельная установка AWG доступна до установки панели и никогда не запускается её lifecycle-командами.
+install_awg() {
+    [[ -f $runtime_scripts/install_awg.sh ]] || die 'В этом выпуске нет установщика AWG; обновите полный bundle менеджера.'
+    if [[ $# -gt 0 || $noninteractive -eq 1 ]]; then bash "$runtime_scripts/install_awg.sh" "$@"; return; fi
+    require_root
+    local port
+    printf 'Будут установлены AWG 3.1 и AmneziaDNS в Docker по официальным скриптам Amnezia.\n'
+    printf 'Существующая установка AWG не заменяется. WARP и установка Docker выполняются отдельно.\n'
+    prompt_value port 'UDP-порт AWG' 55424 required
+    [[ $port =~ ^[0-9]{1,5}$ && $((10#$port)) -ge 1024 && $((10#$port)) -le 65535 ]] || usage_error 'UDP-порт должен быть числом от 1024 до 65535.'
+    confirm "Установить новый AWG и DNS с UDP-портом $port?" || return 0
+    bash "$runtime_scripts/install_awg.sh" --port "$port" --confirm
+}
+
 attach_existing() {
     local container network dns
     if [[ $# -eq 1 && $1 == \{* ]]; then runtime_task attach "$1"; return; fi
@@ -122,8 +136,8 @@ manage_policy() {
 show_ui_access() {
     [[ $# -le 1 ]] || usage_error 'ui-access [SSH_ПОЛЬЗОВАТЕЛЬ@VPS]'
     local ssh_target=${1:-${AWG_SSH_TARGET:-}}
-    if [[ -z $ssh_target && $noninteractive -eq 0 ]]; then prompt_value ssh_target 'SSH-подключение к этому VPS с вашего компьютера' root@YOUR_VPS required; fi
-    runtime_task ui-access "${ssh_target:-root@YOUR_VPS}"
+    if [[ -n $ssh_target ]]; then runtime_task ui-access "$ssh_target"
+    else runtime_task ui-access; fi
 }
 
 restart_awg() {
@@ -159,6 +173,7 @@ usage() {
   rotate-ui-access               Заменить секрет и отозвать сессии панели
 
 Подключение и сеть:
+  install-awg [--port N --confirm] Установить новый AWG/DNS из официальных скриптов Amnezia
   attach [ИМЯ СЕТЬ [DNS]]         Подключить существующий AWG; без аргументов — диалог
   attach '{...}'                 Передать точный JSON payload attach из API
   policy [--json|JSON]            Диалог режима выхода; --json читает, JSON сохраняет
@@ -172,14 +187,14 @@ usage() {
 Без команды открывается меню. Без терминала требуется именованная команда.
 AWG_VPS_NONINTERACTIVE=1 запрещает диалоги; AWG_UI_VERSION задаёт release-тег.
 Для attach без диалога: AWG_CONTAINER, AWG_DOCKER_NETWORK, AWG_DNS_CONTAINER.
-Для SSH-подсказки: AWG_SSH_TARGET. NO_COLOR отключает цвет.
+Адрес SSH определяется автоматически; AWG_SSH_TARGET переопределяет его. NO_COLOR отключает цвет.
 В noninteractive режиме policy без аргументов только читает текущую политику.
 Команда изменения с явными параметрами считается намеренным действием;
 для restart-awg в noninteractive режиме обязательно --confirm.
 
 Теги загружаются только из khorevaa/awg-vps-control releases с SHA-256.
 Если опубликованных выпусков нет, используйте каталог локальной сборки.
-AWG не устанавливается и не обновляется. Изменение клиентов — вне первого выпуска.
+AWG устанавливается только отдельной install-awg. Обновление AWG и изменение клиентов — следующие этапы.
 Aliases: install, update, rollback, uninstall, peers, access, rotate,
          start-ui, stop-ui, restart-ui, warp-setup, warp-reconnect.
 EOF
@@ -195,6 +210,7 @@ dispatch() {
         install|install-ui) install_ui "$@" ;;
         update|update-ui) update_ui "$@" ;;
         update-manager) update_manager "$@" ;;
+        install-awg) install_awg "$@" ;;
         status|doctor|settings|logs|clients|peers)
             [[ $# -eq 0 || ( $# -eq 1 && $1 == --json ) ]] || usage_error "$command_name [--json]"
             [[ $command_name != peers ]] || command_name=clients
@@ -219,40 +235,29 @@ dispatch() {
 }
 
 show_menu() {
-    [[ $noninteractive -eq 0 && -t 1 ]] || usage_error 'Для меню нужен терминал. Укажите команду, например status или help.'
+    [[ $noninteractive -eq 0 && -t 1 ]] || usage_error 'Для меню нужен терминал. Укажите команду, например ui-status или help.'
     local choice action confirmation result
     while true; do
         printf '\n%sAWG VPS Control %s%s\n' "$green" "$manager_version" "$plain"
-        printf '%sСуществующий AWG · отдельная панель · необязательный WARP%s\n' "$blue" "$plain"
-        printf '\n  1. Установить панель              2. Обновить панель\n  3. Статус VPS / AWG / WARP        4. Диагностика\n  5. Найти и подключить AWG         6. Клиенты (только чтение)\n  7. Политика выхода               8. Установить / настроить WARP\n  9. Восстановить маршруты        10. Переподключить WARP\n 11. Перезапустить AWG вручную    12. Журнал восстановления\n 13. Доступ к панели              14. Заменить секрет панели\n 15. Настройки                    16. Статус контейнеров панели\n 17. Запустить панель             18. Остановить панель\n 19. Перезапустить панель         20. Откатить выпуск панели\n 21. Обновить менеджер            22. Удалить контейнеры панели\n 23. Проверить цепочку служб      24. Помощь по командам\n  0. Выход\n\n'
+        printf '%sУстановка и обслуживание · управление VPN — в веб-панели%s\n' "$blue" "$plain"
+        printf '\n  1. Установить AWG в Docker       2. Установить панель\n  3. Обновить панель и менеджер    4. Доступ к панели\n  5. Заменить секрет панели       6. Статус контейнеров панели\n  7. Запустить панель             8. Остановить панель\n  9. Перезапустить панель        10. Откатить выпуск панели\n 11. Удалить контейнеры панели   12. Проверить службы панели\n 13. Помощь по CLI-командам\n  0. Выход\n\n'
         read -r -p 'Выберите действие: ' choice || return 0
         confirmation=''
         case $choice in
             0) return 0 ;;
-            1) action=install-ui ;;
-            2) action=update-ui ;;
-            3) action=status ;;
-            4) action=doctor ;;
-            5) action=attach ;;
-            6) action=clients ;;
-            7) action=policy ;;
-            8) action=setup-warp; confirmation='Установить/настроить официальный WARP? Сначала должен быть явно сохранён режим выхода' ;;
-            9) action=repair; confirmation='Восстановить свои правила и WARP по сохранённой политике?' ;;
-            10) action=reconnect-warp; confirmation='Переподключить WARP? Текущие соединения могут прерваться' ;;
-            11) action=restart-awg ;;
-            12) action=logs ;;
-            13) action=ui-access ;;
-            14) action=rotate-ui-access; confirmation='Заменить секрет панели и отозвать все её сессии?' ;;
-            15) action=settings ;;
-            16) action=ui-status ;;
-            17) action=start ;;
-            18) action=stop; confirmation='Остановить три контейнера панели? WARP и AWG продолжат работу' ;;
-            19) action=restart; confirmation='Перезапустить три контейнера панели?' ;;
-            20) action=rollback-ui; confirmation='Вернуть предыдущий выпуск приложения? Сетевая политика сохранится' ;;
-            21) action=update-manager; confirmation='Обновить менеджер и согласованный runtime/UI из опубликованного выпуска?' ;;
-            22) action=uninstall-ui; confirmation='Удалить три контейнера панели? WARP, guard, состояние и AWG сохранятся' ;;
-            23) action=healthcheck ;;
-            24) action=help ;;
+            1) action=install-awg ;;
+            2) action=install-ui ;;
+            3) action=update-ui ;;
+            4) action=ui-access ;;
+            5) action=rotate-ui-access; confirmation='Заменить секрет панели и отозвать все её сессии?' ;;
+            6) action=ui-status ;;
+            7) action=start ;;
+            8) action=stop; confirmation='Остановить три контейнера панели? WARP и AWG продолжат работу' ;;
+            9) action=restart; confirmation='Перезапустить три контейнера панели?' ;;
+            10) action=rollback-ui; confirmation='Вернуть предыдущий выпуск приложения? Сетевая политика сохранится' ;;
+            11) action=uninstall-ui; confirmation='Удалить три контейнера панели? WARP, guard, состояние и AWG сохранятся' ;;
+            12) action=healthcheck ;;
+            13) action=help ;;
             *) printf '%sНеизвестный пункт.%s\n' "$red" "$plain"; continue ;;
         esac
         if [[ -n $confirmation ]] && ! confirm "$confirmation"; then continue; fi
@@ -260,8 +265,7 @@ show_menu() {
         if bash "$script_path" "$action"; then
             printf '%sДействие завершено.%s\n' "$green" "$plain"
             case $action in
-                install-ui|update-ui|update-manager|rollback-ui)
-                    # После смены выпуска открывается его меню с актуальными версией и командами.
+                install-ui|update-ui|rollback-ui)
                     if [[ -x /usr/local/bin/awg-vps-control ]]; then exec /usr/local/bin/awg-vps-control menu; fi
                     ;;
             esac

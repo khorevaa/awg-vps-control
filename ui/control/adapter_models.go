@@ -23,6 +23,7 @@ type DockerContainer struct {
 	Name            string                `json:"Name"`            // Имя контейнера с начальным slash.
 	State           DockerContainerState  `json:"State"`           // Состояние процесса контейнера.
 	Config          DockerContainerConfig `json:"Config"`          // Формат потока журнала.
+	HostConfig      DockerHostConfig      `json:"HostConfig"`      // Настройка доступности журнала.
 	NetworkSettings DockerNetworkSettings `json:"NetworkSettings"` // Подключённые сети.
 }
 
@@ -36,6 +37,16 @@ type DockerContainerState struct {
 // DockerContainerConfig содержит безопасную настройку формата logs.
 type DockerContainerConfig struct {
 	TTY bool `json:"Tty"` // Признак немультиплексированного потока.
+}
+
+// DockerHostConfig содержит только настройку драйвера журналирования контейнера.
+type DockerHostConfig struct {
+	LogConfig DockerLogConfig `json:"LogConfig"` // Ограниченная проекция настройки журнала.
+}
+
+// DockerLogConfig позволяет отличить отключённую запись журнала от ошибки чтения.
+type DockerLogConfig struct {
+	Type string `json:"Type"` // Имя logging driver; none означает отсутствие записи.
 }
 
 // DockerNetworkSettings содержит минимальные сведения о сетевых подключениях.

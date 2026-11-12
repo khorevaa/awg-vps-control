@@ -1,6 +1,6 @@
 # Совместимость первого выпуска
 
-Цель: Linux amd64, Ubuntu 24.04, systemd, Docker/Compose v2 и существующий AmneziaWG в Docker. Go binaries собираются Go 1.26.9 без CGO; runtime проекта — Go и Bash, без Python. Docker и AWG не устанавливаются проектом.
+Цель: Linux amd64, Ubuntu 24.04, systemd, Docker/Compose plugin >=2 и AmneziaWG в Docker. Go binaries собираются Go 1.26.9 без CGO; runtime проекта — Go и Bash, без Python. Docker должен быть установлен заранее. Существующий AWG подключается без замены; отдельная `install-awg` устанавливает новый AWG 3.1 и AmneziaDNS из официальных скриптов Amnezia5.1.0.6 и проходит интеграционную приёмку. Установка панели не запускает установку AWG.
 
 Compose запускает Web (UID 10001), Control (UID 10002) и Adapter (UID 10003); Adapter использует образ Control в отдельном режиме. Все три контейнера имеют `network_mode: none`, read-only rootfs, `cap_drop: ALL` и no-new-privileges. Только Adapter получает существующий Docker Unix socket и его фактический GID; это доверенный доступ уровня root, даже при read-only bind mount. Web/Control Docker API не получают. Rootless Docker и userns-remap требуют отдельной проверки UID/GID и в первый профиль не входят.
 

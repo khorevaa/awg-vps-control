@@ -219,7 +219,13 @@
     const message = !warp ? "Явно отключить использование WARP и выбрать прямой выход? Изменение может оборвать текущие соединения." : direct ? "Разрешить всему клиентскому трафику и DNS прямой выход при отказе WARP? После восстановления весь трафик автоматически вернётся в WARP; соединения могут оборваться." : "Использовать WARP без прямого fallback? При его отказе клиентский выход будет заблокирован. Уже действующий прямой выход прекратится, соединения могут оборваться.";
     await confirmedOperation("policy.set", { warp_enabled: warp, allow_direct_without_warp: direct, expected_revision: state.policy.revision }, "Изменить политику выхода", message);
   });
-  async function loadLogs() { const data = await api(`/logs?source=${encodeURIComponent(el("log-source").value)}&limit=${el("log-limit").value}`); text("logs-metadata", `${value(data.source)} · ${dateTime(data.observed_at)}${data.truncated ? " · показана ограниченная часть журнала" : ""}`); text("logs-content", Array.isArray(data.lines) && data.lines.length ? data.lines.join("\n") : "В выбранном источнике нет строк."); }
+  async function loadLogs() {
+    const data = await api(`/logs?source=${encodeURIComponent(el("log-source").value)}&limit=${el("log-limit").value}`);
+    el("global-error").hidden = true;
+    const unavailable = data.available === false;
+    text("logs-metadata", `${value(data.source)} · ${dateTime(data.observed_at)}${unavailable ? " · журнал недоступен" : data.truncated ? " · показана ограниченная часть журнала" : ""}`);
+    text("logs-content", unavailable ? value(data.reason, "Запись журнала для этого источника недоступна.") : Array.isArray(data.lines) && data.lines.length ? data.lines.join("\n") : "В выбранном источнике нет строк.");
+  }
 
   function confirmAction(title, message, danger = false) {
     const dialog = el("confirmation"); if (dialog.open) return Promise.resolve(false);

@@ -271,6 +271,13 @@ func (adapter *Adapter) logs(ctx context.Context, request Request) (json.RawMess
 	if apiError != nil {
 		return nil, apiError
 	}
+	if container.HostConfig.LogConfig.Type == "none" {
+		return encodeData(map[string]any{
+			"source": value.Source, "observed_at": nowText(), "available": false,
+			"reason": "Контейнер запущен без записи журнала (log-driver none).",
+			"lines":  []string{}, "truncated": false,
+		}), nil
+	}
 	raw, apiError := adapter.docker.Logs(ctx, container, value.Limit)
 	if apiError != nil {
 		return nil, apiError
@@ -284,5 +291,5 @@ func (adapter *Adapter) logs(ctx context.Context, request Request) (json.RawMess
 	if len(lines) > value.Limit {
 		lines = lines[len(lines)-value.Limit:]
 	}
-	return encodeData(map[string]any{"source": value.Source, "observed_at": nowText(), "lines": lines, "truncated": truncated}), nil
+	return encodeData(map[string]any{"source": value.Source, "observed_at": nowText(), "available": true, "lines": lines, "truncated": truncated}), nil
 }

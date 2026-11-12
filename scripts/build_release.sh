@@ -13,5 +13,6 @@ tar -C "$root" -cf - scripts systemd compose.yaml install.sh awg_vps_control.sh 
 revision=$(git -C "$root" rev-parse HEAD)
 if [[ -n $(git -C "$root" status --porcelain) ]]; then revision="$revision-dirty"; fi
 printf '%s\n' "$revision" > "$output/source_revision"
-(cd "$output" && find . -type f ! -path '*/__pycache__/*' ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | xargs -d '\n' sha256sum > manifest.sha256)
+# Binary исключает преобразование CRLF в Git Bash; manifest всегда использует два пробела.
+(cd "$output" && find . -type f ! -path '*/__pycache__/*' ! -name manifest.sha256 -printf '%P\n' | LC_ALL=C sort | xargs -d '\n' sha256sum --binary | sed -E 's/^([0-9a-f]{64}) \*/\1  /' > manifest.sha256)
 printf 'Release: %s\n' "$output"

@@ -10,9 +10,11 @@
 | DockerClient | `socketPath`, `http`: фиксированный Unix socket и HTTP-клиент без proxy/redirect |
 | WarpClient | `socketPath`: root-owned Unix socket WARP-сервиса |
 | DockerSummary | `ID`, `Names`: минимальные поля списка контейнеров |
-| DockerContainer | `ID`, `Name`, `State`, `Config`, `NetworkSettings`: ограниченная проекция inspect |
+| DockerContainer | `ID`, `Name`, `State`, `Config`, `HostConfig`, `NetworkSettings`: ограниченная проекция inspect |
 | DockerContainerState | `Running`, `StartedAt`, `PID`: состояние существующего контейнера |
 | DockerContainerConfig | `TTY`: формат Docker logs |
+| DockerHostConfig | `LogConfig`: только настройка драйвера журналирования; остальные host options не включаются в модель |
+| DockerLogConfig | `Type`: имя logging driver из `HostConfig.LogConfig.Type`; ровно `none` означает явно отключённую запись журнала |
 | DockerNetworkSettings | `Networks`: имена подключённых сетей и минимальные привязки |
 | DockerNetworkBinding | `NetworkID`, `IPAddress`: подтверждённые Docker значения без env и volumes |
 | DockerExecRequest | `AttachStdout`, `AttachStderr`, `TTY`, `Privileged`, `User`, `Cmd`: фиксированный запуск чтения в существующем AWG-контейнере |
@@ -54,5 +56,7 @@ Manual restart адресует только pinned 64-hex container ID. До и
 Фиксированные endpoints: `_ping`, список работающих контейнеров (до 32), inspect выбранных контейнеров, exec create/start/inspect только для фиксированных AWG reads, logs выбранного pinned AWG/DNS, restart pinned AWG. Docker API paths строятся только из проверенных container/exec IDs и известных литералов; HTTP redirects/proxies запрещены.
 
 Exec не использует shell: `timeout -s KILL 8` ограничивает жизнь фиксированных `awg show ...`, `test -f` и `cat -- /opt/amnezia/awg/...` команд. Docker socket cancellation сам по себе не завершает exec, поэтому обязательна утилита timeout в поддерживаемом Amnezia-контейнере. Stdout/stderr Docker multiplex проверяется и ограничивается; сырой stderr не возвращается. Inspect/list ограничены 2 MiB, exec 1 MiB, logs 512 KiB, IPC 1 MiB. HTTP dial — 2 секунды, обычное чтение — до 30 секунд, restart — до 45 секунд; общий запрос имеет deadline. Health проверяет Docker `_ping` и WARP health за 2 секунды, возвращает только status.
+
+При `HostConfig.LogConfig.Type=none` источник AWG/DNS возвращает успешный Logs-снимок с `available:false`, фиксированной безопасной `reason`, `lines:[]`, `truncated:false`, `source` и `observed_at`. Запрос Docker logs в этом случае не выполняется. Это штатное ограничение официальных контейнеров Amnezia, запускаемых с `--log-driver none`; [документация Docker](https://docs.docker.com/engine/logging/configure/) подтверждает отсутствие журналов у этого драйвера. Adapter не меняет драйвер и не пересоздаёт контейнер. Для успешно прочитанных Docker logs возвращается `available:true`. Отсутствующий, неизвестный или другой logging driver не подменяет ошибку Docker доступным пустым журналом: сохраняется обычный запрос и обработка его ошибок. Проксируемые legacy WARP/supervisor snapshots могут не содержать `available`/`reason`.
 
 Метрики читаются только из смонтированных `hostname`, `uptime`, `loadavg`, `meminfo`, по 64 KiB максимум; disk — statfs раздела adapter state. Отсутствующие метрики дают явные diagnostics и null, а не данные контейнера. PrivateKey/PSK и секретные присваивания маскируются перед выдачей; имена и clientId берутся из native clientsTable, собственной базы пользователей нет.

@@ -1,6 +1,8 @@
 # Управляющий скрипт
 
-`awg_vps_control.sh` — самостоятельный менеджер панели: цветное меню с версией, пошаговое подключение существующего AWG, управление доступом, политикой WARP и жизненным циклом приложения. В checkout он использует соседний каталог `scripts`; установленная команда `/usr/local/bin/awg-vps-control` разрешает ссылку на менеджер текущего выпуска в `/opt/awg_vps_control/current`. Менеджер вызывает именованные операции `scripts/awg_vps_control.sh`; проверка ревизий, Unix IPC и изменения состояния остаются в runtime.
+`awg_vps_control.sh` — самостоятельный сервисный менеджер: установка AWG, установка и обслуживание панели, доступ и ротация секрета. По уточнению пользователя меню содержит только сервисные пункты: обзор, клиенты, политика, диагностика и журналы находятся в веб-панели. Именованные CLI-команды для ручного восстановления остаются доступны через `help`. В checkout менеджер использует соседний каталог `scripts`; установленная команда `/usr/local/bin/awg-vps-control` разрешает ссылку на текущий выпуск в `/opt/awg_vps_control/current`. Проверка ревизий, Unix IPC и изменения состояния остаются в runtime.
+
+Меню объединяет обновление панели и менеджера в один пункт, поскольку они поставляются общим bundle. Отдельного повторяющегося меню во внутреннем runtime-скрипте нет. Команда доступа автоматически определяет адрес VPS и SSH-порт; явный аргумент `ui-access root@адрес` или `AWG_SSH_TARGET` позволяет их переопределить.
 
 ```bash
 # На VPS: установить заранее собранный и доставленный bundle.
@@ -46,7 +48,8 @@ sudo awg-vps-control restart-awg --confirm
 | `status`, `doctor`, `settings`, `logs`, `clients` | Читаемый вывод; `--json` возвращает исходный ответ API |
 | `ui-status` | Состояние трёх контейнеров панели |
 | `healthcheck` | Проверка цепочки Web → Control → Adapter → WARP и Docker API |
-| `ui-access [user@vps]` | URL панели, секрет входа и команда SSH-туннеля |
+| `ui-access [user@vps]` | URL панели, секрет и SSH-туннель; адрес VPS определяется автоматически, аргумент переопределяет его |
+| `install-awg [--port N] --confirm` | Свежая установка AWG/DNS в Docker из закреплённых официальных скриптов; существующий AWG не заменяется |
 | `rotate-ui-access` | Новый секрет и отзыв всех сессий панели |
 | `start`, `stop`, `restart` | Только Web, Control и Adapter |
 | `rollback-ui` | Предыдущий выпуск приложения с проверкой работоспособности |
@@ -101,7 +104,7 @@ sudo env AWG_VPS_NONINTERACTIVE=1 awg-vps-control install-ui /root/release
 | В исходном проекте | В awg-vps-control |
 | --- | --- |
 | [`runtime_task`, определение runtime и `prompt_value`](https://github.com/khorevaa/ocserv-vps/blob/e05a4f9a3e11a6a5e7883b459ad921ac7bacc8e8/ocserv-vps.sh#L1-L60) | Разрешение ссылки/checkout, вызов именованного runtime, параметры и env для диалогов |
-| [`show_menu`](https://github.com/khorevaa/ocserv-vps/blob/e05a4f9a3e11a6a5e7883b459ad921ac7bacc8e8/ocserv-vps.sh#L434) | Версия и цветное меню, отдельные доступ, настройки, lifecycle и WARP; возврат после ошибки |
+| [`show_menu`](https://github.com/khorevaa/ocserv-vps/blob/e05a4f9a3e11a6a5e7883b459ad921ac7bacc8e8/ocserv-vps.sh#L434) | Версия и цветное сервисное меню, доступ и lifecycle; возврат после ошибки, без дублирования веб-панели |
 | [`usage` и dispatch](https://github.com/khorevaa/ocserv-vps/blob/e05a4f9a3e11a6a5e7883b459ad921ac7bacc8e8/ocserv-vps.sh#L476) | Полная справка, CLI aliases, noninteractive режим и проверка аргументов |
 | [`update_manager`](https://github.com/khorevaa/ocserv-vps/blob/e05a4f9a3e11a6a5e7883b459ad921ac7bacc8e8/ocserv-vps.sh#L407) | Выбор опубликованного тега; дополнительно SHA-256, безопасный tar и общий bundle вместо raw installer |
 | `install-ui`, `update-ui`, `ui-access`, `rotate-ui-access`, `settings`, `start/stop/restart` | Отдельные команды с теми же ролями; lifecycle ограничен тремя контейнерами панели |

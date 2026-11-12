@@ -25,6 +25,8 @@ Control допускает Web UID 10001; локальный root и собст�
 | GET | `/api/v1/operations` | недавние операции, массив Operation |
 | GET | `/api/v1/operations/{id}` | Operation |
 
+`GET /api/v1/logs` возвращает Logs-снимок. Дополнительные `available`/`reason` совместимы с прежним форматом: `available:false` обозначает известную недоступность источника, HTTP 200, `lines:[]`, `truncated:false` и безопасное пояснение в `reason`. Для штатного AWG/DNS с Docker `log-driver none` журнал не записывается, поэтому Docker logs не запрашивается. Панель показывает причину внутри раздела журнала; контейнер/драйвер не изменяется. Успешно прочитанные Docker journals содержат `available:true`; у legacy WARP/supervisor эти дополнительные поля могут отсутствовать. Другие ошибки Docker и транспорта сохраняют обычные HTTP ошибки.
+
 ## Control
 
 Read actions: `health`, `overview`, `discover`, `peers`, `diagnostics`, `configuration`, `logs`, `policy.get`, `operations.list`, `operations.get` (payload `{id}`). Мутация `operations.create` принимает OperationRequest и запускается последовательно с постоянным журналом.

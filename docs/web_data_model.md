@@ -24,6 +24,8 @@
 
 Снимки и операции передаются как RawMessage согласно публичной модели. Web не создаёт собственных VPN peers, профилей или секретов WARP. IControlClient принимает context, action и JSON payload, возвращает data либо безопасную apiError.
 
+Frontend обрабатывает дополнительное `Logs.available:false` как известное ограничение источника: выводит `reason` внутри журнала и помечает снимок недоступным, без общей ошибки страницы. Отсутствие строк при доступном источнике сохраняет отдельное сообщение «нет строк». Отсутствующее `available` поддерживает legacy WARP/supervisor; HTTP ошибки по-прежнему показываются как ошибки.
+
 Frontend читает `Overview.awg` как `{running: bool, message: string, started_at?: string}`: `running=true` означает «Работает», `false` — «Работа не подтверждена» (inspection мог завершиться ошибкой). `Overview.warp` имеет `{installed: bool, service_active: bool, connected: bool, observed_at: string}`: `installed=false` — «Не установлен»; `installed=true` и `connected=true/false` — «Подключён»/«Отключён». Отсутствующий либо неверно типизированный статус показывает «Неизвестно»; работа службы и туннеля дополнительно выводится отдельными диагностическими проверками. Единого поля `status` у этих снимков нет.
 
 Идентификаторы диагностик переводятся в русские названия: `awg.container`, `awg.interface`, `warp.service`, `warp.tunnel`, `routing.capability`, `routing.managed`, `routing.guard`, `egress.https`, `egress.dns`, `dependency.<binary>`. Неизвестный идентификатор остаётся видимым для диагностики.

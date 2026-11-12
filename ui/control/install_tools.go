@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -41,9 +43,23 @@ func runInstallTools(args []string) error {
 	case "init":
 		return installInitialize()
 	case "ui-access":
-		target := "root@YOUR_VPS"
+		if len(args) > 2 {
+			return fmt.Errorf("ui-access принимает только необязательный SSH target")
+		}
+		target := os.Getenv("AWG_SSH_TARGET")
+		sshPort := "22"
 		if len(args) == 2 {
 			target = args[1]
+		}
+		if target == "" {
+			address, detectedPort, err := installSSHAddress()
+			if err != nil {
+				return err
+			}
+			if strings.Contains(address, ":") {
+				address = "[" + address + "]"
+			}
+			target, sshPort = "root@"+address, detectedPort
 		}
 		if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.@:\[\]-]*$`).MatchString(target) {
 			return fmt.Errorf("недопустимый SSH target")
@@ -64,7 +80,11 @@ func runInstallTools(args []string) error {
 		if _, err := strconv.ParseUint(port, 10, 16); err != nil {
 			return fmt.Errorf("неверный порт панели")
 		}
-		fmt.Printf("ssh -N -o ExitOnForwardFailure=yes -L localhost:%s:/run/awg_vps_web/web.sock %s\nOpen: %s\nAccess secret: %s\n", port, target, values["AWG_ALLOWED_ORIGIN"], strings.TrimSpace(string(secret)))
+		portOption := ""
+		if sshPort != "22" {
+			portOption = " -p " + sshPort
+		}
+		fmt.Printf("ssh -N -o ExitOnForwardFailure=yes%s -L localhost:%s:/run/awg_vps_web/web.sock %s\nOpen: %s\nAccess secret: %s\n", portOption, port, target, values["AWG_ALLOWED_ORIGIN"], strings.TrimSpace(string(secret)))
 		return nil
 	case "rotate-secret":
 		secret, err := installRandomHex(48)
@@ -79,6 +99,56 @@ func runInstallTools(args []string) error {
 	default:
 		return fmt.Errorf("неизвестная команда инструментов установки")
 	}
+}
+
+// installSSHAddress определяет адрес стороны сервера текущего SSH-сеанса либо единственный публичный IP хоста.
+func installSSHAddress() (string, string, error) {
+	connection := strings.Fields(os.Getenv("SSH_CONNECTION"))
+	if len(connection) == 4 {
+		address, addressErr := netip.ParseAddr(connection[2])
+		port, portErr := strconv.ParseUint(connection[3], 10, 16)
+		if addressErr == nil && address.Zone() == "" && address.IsGlobalUnicast() && portErr == nil && port > 0 {
+			return address.Unmap().String(), strconv.FormatUint(port, 10), nil
+		}
+	}
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return "", "", fmt.Errorf("не удалось определить адрес VPS; укажите ui-access root@АДРЕС: %w", err)
+	}
+	ipv4, ipv6 := map[string]bool{}, map[string]bool{}
+	carrierGradeNAT := netip.MustParsePrefix("100.64.0.0/10")
+	for _, device := range interfaces {
+		if device.Flags&net.FlagUp == 0 || device.Flags&net.FlagLoopback != 0 || device.Name == warpInterface {
+			continue
+		}
+		addresses, addressesErr := device.Addrs()
+		if addressesErr != nil {
+			return "", "", fmt.Errorf("не удалось прочитать адреса VPS; укажите ui-access root@АДРЕС: %w", addressesErr)
+		}
+		for _, value := range addresses {
+			prefix, parseErr := netip.ParsePrefix(value.String())
+			if parseErr != nil {
+				continue
+			}
+			address := prefix.Addr().Unmap()
+			if !address.IsGlobalUnicast() || address.IsPrivate() || carrierGradeNAT.Contains(address) || address.Zone() != "" {
+				continue
+			}
+			if address.Is4() {
+				ipv4[address.String()] = true
+			} else {
+				ipv6[address.String()] = true
+			}
+		}
+	}
+	for _, candidates := range []map[string]bool{ipv4, ipv6} {
+		if len(candidates) == 1 {
+			for address := range candidates {
+				return address, "22", nil
+			}
+		}
+	}
+	return "", "", fmt.Errorf("адрес VPS неоднозначен; укажите ui-access root@АДРЕС или AWG_SSH_TARGET")
 }
 
 // installVerifyRelease проверяет полноту manifest, типы файлов и контрольные суммы.
@@ -117,7 +187,7 @@ func installVerifyRelease(directory string) error {
 	if err := scanner.Err(); err != nil {
 		return err
 	}
-	required := []string{"install.sh", "awg_vps_control.sh", "compose.yaml", "version", "source_revision", "license", "bin/awg_web", "bin/awg_control", "scripts/awg_vps_control.sh", "scripts/runtime_dockerfile", "systemd/awg_vps_guard.service", "systemd/awg_vps_warp.service", "systemd/awg_vps_control.conf"}
+	required := []string{"install.sh", "awg_vps_control.sh", "compose.yaml", "version", "source_revision", "license", "bin/awg_web", "bin/awg_control", "scripts/awg_vps_control.sh", "scripts/install_awg.sh", "scripts/awg_upstream.sha256", "scripts/runtime_dockerfile", "systemd/awg_vps_guard.service", "systemd/awg_vps_warp.service", "systemd/awg_vps_control.conf"}
 	for _, name := range required {
 		if _, ok := listed[name]; !ok {
 			return fmt.Errorf("неполный manifest: %s", name)

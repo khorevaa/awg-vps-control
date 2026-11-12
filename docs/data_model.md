@@ -28,7 +28,7 @@
 - Peer: `public_key`, `name`, `allowed_ips` (массив строк), `endpoint`, `latest_handshake` (Unix seconds; 0 — не наблюдался), `rx_bytes`, `tx_bytes`. Read-only; собственная база пользователей отсутствует.
 - DiagnosticCheck: `id`, `status` (`ok|warning|error|unknown`), `message`, `checked_at`. Проверки службы, туннеля, правил, HTTPS и DNS независимы. Неизвестное состояние не означает успешную проверку.
 - Diagnostics: `observed_at`, `checks` (массив DiagnosticCheck).
-- Logs: `source`, `observed_at`, `lines` (массив очищенных строк), `truncated` (bool).
+- Logs: `source`, `observed_at`, `lines` (массив очищенных строк), `truncated` (bool); дополнительные поля `available` (bool) и `reason` (безопасная причина недоступности). Для AWG/DNS с Docker driver `none`: `available:false`, непустая `reason`, `lines:[]`, `truncated:false`; это успешный снимок известного ограничения. Прочитанные Docker logs имеют `available:true`. Legacy WARP/supervisor snapshots могут не содержать новые поля; UI считает недоступностью только явное `available:false`. Ошибки Docker, транспорта и привязки остаются Error, а не превращаются в пустой журнал.
 - Configuration: `filename`, `revision`, `content` (только маскированный текст), `read_only` (всегда true в первом выпуске).
 
 ## Сессии Web

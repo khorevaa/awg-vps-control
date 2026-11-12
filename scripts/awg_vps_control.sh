@@ -14,49 +14,10 @@ request() {
     case $1 in policy.get|policy.set|repair|warp.setup|warp.reconnect) handler=warp ;; esac
     "$release/bin/awg_control" "$handler" request "$body"
 }
-confirm() {
-    local answer
-    read -r -p "$1 [да/нет]: " answer
-    [[ $answer == да ]]
-}
-menu() {
-    [[ -t 0 && -t 1 ]] || { echo 'Для меню нужен терминал; используйте именованную команду.' >&2; return 2; }
-    local choice container dns network directory
-    while true; do
-        printf '\nAWG VPS Control\n1) Статус\n2) Диагностика\n3) Обнаружить / подключить AWG\n4) Политика выхода\n5) Установить / настроить WARP\n6) Восстановить маршруты\n7) Переподключить WARP\n8) Перезапустить AWG вручную\n9) Журнал восстановления\n10) Доступ к панели\n11) Заменить секрет панели\n12) Обновить панель\n13) Откатить панель\n14) Удалить контейнеры панели\n0) Выход\n'
-        read -r -p 'Выбор: ' choice || return 0
-        case $choice in
-            0) return 0 ;;
-            1) request overview || true ;;
-            2) request diagnostics || true ;;
-            3)
-                request discover || continue
-                if confirm 'Подключить обнаруженную установку без изменения её файлов?'; then
-                    read -r -p 'Имя контейнера AWG: ' container
-                    read -r -p 'Общая Docker-сеть: ' network
-                    read -r -p 'DNS-контейнер (можно оставить пустым): ' dns
-                    "$release/bin/awg_control" manual attach "$container" "$network" "$dns" || true
-                fi
-                ;;
-            4) "$release/bin/awg_control" manual policy || true ;;
-            5) if confirm 'Установить WARP и подготовить интеграцию? Режим выхода выбирается отдельно'; then request warp.setup || true; fi ;;
-            6) if confirm 'Восстановить собственные правила по сохранённой политике?'; then request repair || true; fi ;;
-            7) if confirm 'Переподключить WARP? Текущие соединения могут прерваться'; then request warp.reconnect || true; fi ;;
-            8) if confirm 'Перезапустить существующий AWG и прервать подключения клиентов?'; then request awg.restart || true; fi ;;
-            9) request logs '{"source":"supervisor","limit":100}' || true ;;
-            10) "$release/bin/awg_control" install-tools ui-access || true ;;
-            11) if confirm 'Заменить секрет панели и отозвать текущие сессии?'; then "$release/bin/awg_control" install-tools rotate-secret || true; fi ;;
-            12) read -r -p 'Каталог распакованного выпуска: ' directory; bash "$directory/install.sh" "$directory" || true ;;
-            13) if confirm 'Откатить приложение на предыдущий выпуск? Политика сети сохранится'; then "$0" rollback-ui || true; fi ;;
-            14) if confirm 'Удалить контейнеры панели, сохранив WARP, его защиту и AWG?'; then compose down || true; fi ;;
-            *) echo 'Неизвестный пункт.' ;;
-        esac
-    done
-}
 command=${1:-}
 if [[ -z $command ]]; then if [[ -t 0 && -t 1 ]]; then command=menu; else command=status; fi; fi
 case $command in
-    menu) menu ;;
+    menu) exec bash "$release/awg_vps_control.sh" menu ;;
     start-ui)
         systemd-tmpfiles --create /etc/tmpfiles.d/awg_vps_control.conf
         compose up -d --remove-orphans --wait --wait-timeout 90
@@ -103,7 +64,7 @@ case $command in
         done
         echo 'Контейнеры панели перезапущены; готовность подтверждена.'
         ;;
-    ui-access) "$release/bin/awg_control" install-tools ui-access "${2:-root@YOUR_VPS}" ;;
+    ui-access) shift; "$release/bin/awg_control" install-tools ui-access "$@" ;;
     rotate-ui-access) "$release/bin/awg_control" install-tools rotate-secret ;;
     install-ui|update-ui)
         [[ $# -eq 2 ]] || { echo 'Usage: awg-vps-control update-ui <release-directory>' >&2; exit 2; }
