@@ -240,24 +240,18 @@ show_menu() {
     while true; do
         printf '\n%sAWG VPS Control %s%s\n' "$green" "$manager_version" "$plain"
         printf '%sУстановка и обслуживание · управление VPN — в веб-панели%s\n' "$blue" "$plain"
-        printf '\n  1. Установить AWG в Docker       2. Установить панель\n  3. Обновить панель и менеджер    4. Доступ к панели\n  5. Заменить секрет панели       6. Статус контейнеров панели\n  7. Запустить панель             8. Остановить панель\n  9. Перезапустить панель        10. Откатить выпуск панели\n 11. Удалить контейнеры панели   12. Проверить службы панели\n 13. Помощь по CLI-командам\n  0. Выход\n\n'
+        printf '\n  1. Установить AWG в Docker\n  2. Установить / обновить панель\n  3. Доступ к панели\n  4. Перезапустить панель\n  0. Выход\n\nДругие сервисные команды: awg-vps-control help\n\n'
         read -r -p 'Выберите действие: ' choice || return 0
         confirmation=''
         case $choice in
             0) return 0 ;;
             1) action=install-awg ;;
-            2) action=install-ui ;;
-            3) action=update-ui ;;
-            4) action=ui-access ;;
-            5) action=rotate-ui-access; confirmation='Заменить секрет панели и отозвать все её сессии?' ;;
-            6) action=ui-status ;;
-            7) action=start ;;
-            8) action=stop; confirmation='Остановить три контейнера панели? WARP и AWG продолжат работу' ;;
-            9) action=restart; confirmation='Перезапустить три контейнера панели?' ;;
-            10) action=rollback-ui; confirmation='Вернуть предыдущий выпуск приложения? Сетевая политика сохранится' ;;
-            11) action=uninstall-ui; confirmation='Удалить три контейнера панели? WARP, guard, состояние и AWG сохранятся' ;;
-            12) action=healthcheck ;;
-            13) action=help ;;
+            2)
+                if [[ -L /opt/awg_vps_control/current ]]; then action=update-ui
+                else action=install-ui; fi
+                ;;
+            3) action=ui-access ;;
+            4) action=restart; confirmation='Перезапустить три контейнера панели?' ;;
             *) printf '%sНеизвестный пункт.%s\n' "$red" "$plain"; continue ;;
         esac
         if [[ -n $confirmation ]] && ! confirm "$confirmation"; then continue; fi
