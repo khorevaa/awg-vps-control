@@ -177,6 +177,12 @@ func (connection *Connection) serveHTTP(writer http.ResponseWriter, request *htt
 		return
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusUnauthorized || request.Method == http.MethodPost && request.URL.Path == "/api/v1/auth/logout" && response.StatusCode >= 200 && response.StatusCode < 300 {
+		defer func() {
+			_ = http.NewResponseController(writer).Flush()
+			_ = connection.Close()
+		}()
+	}
 	if response.StatusCode == http.StatusSwitchingProtocols {
 		proxyError(writer, http.StatusBadGateway, "Смена протокола запрещена.")
 		return

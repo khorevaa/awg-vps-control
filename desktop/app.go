@@ -178,8 +178,8 @@ func (app *DesktopApp) connect() {
 			if app.closed || app.generation != generation || ctx.Err() != nil {
 				return
 			}
-			app.connecting = false
 			if connectError != nil {
+				app.connecting = false
 				cancel()
 				app.cancel = nil
 				var challenge *connection.HostKeyChallenge
@@ -189,13 +189,20 @@ func (app *DesktopApp) connect() {
 				} else {
 					app.setMessage("Подключение не выполнено: "+connectError.Error(), true)
 				}
-			} else if viewError := app.openPanel(connected); viewError != nil {
-				cancel()
-				app.cancel = nil
-				app.setMessage("Не удалось открыть встроенную панель: "+viewError.Error(), true)
 			} else {
-				app.connection, app.draft, accepted = connected, profile, true
-				app.setMessage("SSH подключён. Войдите в панель её обычным секретом доступа.", false)
+				viewError := app.openPanel(ctx, connected, generation)
+				if app.closed || app.generation != generation || ctx.Err() != nil {
+					return
+				}
+				app.connecting = false
+				if viewError != nil {
+					cancel()
+					app.cancel = nil
+					app.setMessage("Не удалось открыть встроенную панель: "+viewError.Error(), true)
+				} else {
+					app.connection, app.draft, accepted = connected, profile, true
+					app.setMessage("SSH подключён. Панель авторизована и готова к работе.", false)
+				}
 			}
 			app.window.Invalidate()
 		})
@@ -239,21 +246,18 @@ func (app *DesktopApp) disconnect() {
 	app.connecting = false
 	app.challenge = nil
 	app.clearSecret()
-	if app.connection != nil {
-		_ = app.connection.Close()
-	}
-	app.clearPendingSave()
 	if app.cancel != nil {
 		app.cancel()
 		app.cancel = nil
 	}
-	if app.webView != nil {
-		app.webView.Destroy()
-		app.webView = nil
-	}
 	if app.connection != nil {
 		_ = app.connection.Close()
 		app.connection = nil
+	}
+	app.clearPendingSave()
+	if app.webView != nil {
+		app.webView.Destroy()
+		app.webView = nil
 	}
 	app.setMessage("SSH отключён. Выберите подключение или укажите новый VPS.", false)
 }

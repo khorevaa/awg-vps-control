@@ -172,6 +172,27 @@ func Connect(ctx context.Context, dir string, profile SSHProfile, credentials Cr
 		return nil, errors.New("SSH-пользователь не может открыть фиксированный Unix socket панели.")
 	}
 	_ = probe.Close()
+	secret, err := remoteAccessSecret(client)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(secret)
+	transport := panelTransport(client, tcp, remoteHost)
+	defer func() {
+		if !success {
+			transport.CloseIdleConnections()
+		}
+	}()
+	panelCookie, err := authenticatePanel(connectContext, transport, remoteHost, remoteOrigin, secret)
+	clear(secret)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if !success {
+			*panelCookie = http.Cookie{}
+		}
+	}()
 	if !stopConnect() || connectContext.Err() != nil {
 		return nil, errors.New("Время SSH-подключения истекло либо попытка отменена.")
 	}
@@ -190,8 +211,7 @@ func Connect(ctx context.Context, dir string, profile SSHProfile, credentials Cr
 	_, localPort, _ := net.SplitHostPort(listener.Addr().String())
 	localHost := "awg-" + hex.EncodeToString(token) + ".localhost:" + localPort
 	sessionContext, cancel := context.WithCancel(ctx)
-	connection := &Connection{tcp: tcp, ssh: client, listener: listener, localOrigin: "http://" + localHost, localHost: localHost, remoteHost: remoteHost, remoteOrigin: remoteOrigin, cancel: cancel, done: make(chan struct{})}
-	connection.transport = &http.Transport{Proxy: nil, DisableCompression: true, MaxIdleConns: 8, MaxIdleConnsPerHost: 8, MaxConnsPerHost: 8, IdleConnTimeout: 60 * time.Second, ResponseHeaderTimeout: 30 * time.Second, MaxResponseHeaderBytes: 32768, DialContext: connection.dialSocket}
+	connection := &Connection{tcp: tcp, ssh: client, transport: transport, listener: listener, localOrigin: "http://" + localHost, localHost: localHost, remoteHost: remoteHost, remoteOrigin: remoteOrigin, cancel: cancel, done: make(chan struct{}), panelCookie: panelCookie}
 	connection.server = &http.Server{Handler: http.HandlerFunc(connection.serveHTTP), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 35 * time.Second, WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32768, ErrorLog: log.New(io.Discard, "", 0), BaseContext: func(net.Listener) context.Context { return sessionContext }}
 	go func() {
 		select {
@@ -214,20 +234,6 @@ func Connect(ctx context.Context, dir string, profile SSHProfile, credentials Cr
 	default:
 	}
 	return connection, nil
-}
-
-// dialSocket запрещает обычный TCP proxy и ограничивает ожидание SSH channel.
-func (connection *Connection) dialSocket(ctx context.Context, network, address string) (net.Conn, error) {
-	if network != "tcp" || address != connection.remoteHost {
-		return nil, errors.New("Произвольный адрес туннеля запрещён.")
-	}
-	dialContext, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	channel, err := connection.ssh.DialContext(dialContext, "unix", webSocket)
-	if err != nil && dialContext.Err() != nil {
-		_ = connection.Close()
-	}
-	return channel, err
 }
 
 // maintain удаляет просроченный профиль и выявляет исчезнувший SSH transport.
@@ -265,6 +271,10 @@ func (connection *Connection) Close() error {
 		connection.mutex.Lock()
 		connection.closed = true
 		connection.saving = false
+		if connection.panelCookie != nil {
+			*connection.panelCookie = http.Cookie{}
+			connection.panelCookie = nil
+		}
 		if connection.pending != nil {
 			clear(connection.pending.Data)
 			connection.pending = nil

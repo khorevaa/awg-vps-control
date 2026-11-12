@@ -3,9 +3,9 @@ name: Desktop Windows
 on:
   push:
     branches: [develop, main, 'codex/**']
-    paths: ['desktop/**', 'scripts/build_desktop.ps1', '.github/workflows/desktop_windows.yml']
+    paths: ['desktop/**', 'scripts/build_desktop.ps1', '.github/workflows/desktop_windows.yml', '.gitattributes', 'version']
   pull_request:
-    paths: ['desktop/**', 'scripts/build_desktop.ps1', '.github/workflows/desktop_windows.yml']
+    paths: ['desktop/**', 'scripts/build_desktop.ps1', '.github/workflows/desktop_windows.yml', '.gitattributes', 'version']
   workflow_dispatch:
 
 permissions:
@@ -53,9 +53,10 @@ jobs:
       - name: Build portable application
         shell: pwsh
         run: |
-          git status --porcelain=v1 --untracked-files=all
           git diff --exit-code
           if ($LASTEXITCODE -ne 0) { throw 'Tracked sources changed during verification' }
+          $changes = git status --porcelain=v1 --untracked-files=all
+          if ($changes) { throw "Working copy changed: $changes" }
           ./scripts/build_desktop.ps1
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

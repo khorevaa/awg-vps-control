@@ -74,4 +74,5 @@ type Connection struct {
 	pending      *PendingProfileDownload // Единственный файл, ещё не переданный UI.
 	downloading  bool                    // Резервирование до серверного одноразового consume.
 	saving       bool                    // Запрет следующего consume, пока native UI владеет переданным файлом.
+	panelCookie  *http.Cookie            // Проверенная сессия панели только до единственной передачи WebView.
 }
