@@ -57,4 +57,10 @@ jobs:
           (cd dist && sha256sum --check awg_vps_control_linux_amd64.tar.gz.sha256)
           release_options=()
           if [[ "$TAG" == *-* ]]; then release_options+=(--prerelease); fi
-          gh release create "$TAG" --verify-tag --generate-notes --title "awg-vps-control $TAG" "${release_options[@]}" dist/awg_vps_control_linux_amd64.tar.gz dist/awg_vps_control_linux_amd64.tar.gz.sha256
+          notes_file="docs/releases/${TAG//[.-]/_}.md"
+          if [[ -f "$notes_file" ]]; then
+            release_options+=(--notes-file "$notes_file")
+          else
+            release_options+=(--generate-notes)
+          fi
+          gh release create "$TAG" --verify-tag --title "awg-vps-control $TAG" "${release_options[@]}" dist/awg_vps_control_linux_amd64.tar.gz dist/awg_vps_control_linux_amd64.tar.gz.sha256

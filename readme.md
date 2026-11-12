@@ -2,7 +2,7 @@
 
 Закрытая веб-панель для управления личным VPS с AmneziaWG и необязательным Cloudflare WARP. Она показывает состояние VPN, проверяет DNS и выход в интернет, восстанавливает собственные маршруты и управляет политикой выхода клиентов. Доступ к панели — через SSH-туннель, без публичного HTTP-порта.
 
-**Текущая версия: `0.1.0-dev.2`. Стабильный выпуск ещё не объявлен.**
+**Текущий предварительный выпуск: [`v0.1.0-rc.1`](https://github.com/khorevaa/awg-vps-control/releases/tag/v0.1.0-rc.1). Стабильный `v0.1.0` ожидает завершения сетевой приёмки.**
 
 На тестовом профиле прошли серверные проверки WARP, прямого резервного выхода, аварийного восстановления и reboot, 45 браузерных проверок обновлённого UI и 18 HTTP-проверок через JetBrains CLI. Настоящий клиент Amnezia на Windows подключился: подтверждены свежий handshake, трафик и выход через WARP. Остались отдельная клиентская DNS-проба, IPv6 и административные исключения. Подробные результаты и границы проверок — в [протоколе готовности](docs/verification_status.md).
 
@@ -39,30 +39,35 @@ WARP необязателен. Проверенный серверный про�
 
 ### 1. Получить и установить проверенный bundle
 
-Для текущей dev-версии используйте артефакт **успешного CI для выбранного commit** из [GitHub Actions](https://github.com/khorevaa/awg-vps-control/actions/workflows/test.yml). Артефакт `awg_vps_control_linux_amd64` содержит архив и файл SHA-256. Распакуйте скачанный ZIP на своём компьютере и перенесите оба файла в новый каталог `/root/awg_vps_release` на VPS через существующее SSH/SFTP-подключение.
-
-В root SSH-сеансе на VPS:
+Архив и SHA-256 доступны в [assets предварительного выпуска `v0.1.0-rc.1`](https://github.com/khorevaa/awg-vps-control/releases/tag/v0.1.0-rc.1). Для первой установки выполните в root SSH-сеансе на VPS:
 
 ```bash
-cd /root/awg_vps_release
+(
+set -eu
+release_dir=$(mktemp -d /root/awg_vps_release.XXXXXX)
+cd "$release_dir"
+release_base=https://github.com/khorevaa/awg-vps-control/releases/download/v0.1.0-rc.1
+curl --fail --location --proto '=https' --tlsv1.2 --output awg_vps_control_linux_amd64.tar.gz "$release_base/awg_vps_control_linux_amd64.tar.gz"
+curl --fail --location --proto '=https' --tlsv1.2 --output awg_vps_control_linux_amd64.tar.gz.sha256 "$release_base/awg_vps_control_linux_amd64.tar.gz.sha256"
 sha256sum --check awg_vps_control_linux_amd64.tar.gz.sha256
 tar -xzf awg_vps_control_linux_amd64.tar.gz
 bash release/awg_vps_control.sh install-ui "$PWD/release"
 awg-vps-control healthcheck
+)
 ```
 
 При несовпадении SHA-256 остановитесь. Установщик дополнительно проверяет manifest файлов и готовность сервисов. Go и компилятор на VPS не нужны: bundle содержит готовые бинарники. Установка панели не запускает `install-awg`, не меняет native файлы Amnezia и не включает WARP. Секрет доступа при обновлении сохраняется.
 
-Артефакты CI имеют ограниченный срок хранения. Собрать bundle самостоятельно можно по [инструкции сборки](docs/operations_guide.md#сборка-и-установка-панели); для сборки требуется Go 1.26.9.
+Также можно взять артефакт успешного [GitHub Actions](https://github.com/khorevaa/awg-vps-control/actions/workflows/test.yml) для выбранного commit или собрать bundle по [инструкции сборки](docs/operations_guide.md#сборка-и-установка-панели). Артефакты CI имеют ограниченный срок хранения; для самостоятельной сборки требуется Go 1.26.9.
 
-После публикации подходящего выпуска в [GitHub Releases](https://github.com/khorevaa/awg-vps-control/releases) менеджер сможет получить его по точному тегу или `latest`:
+На уже установленной панели менеджер загружает выпуск по точному тегу:
 
 ```bash
-# На уже установленной панели, после появления опубликованного выпуска:
-awg-vps-control update-ui latest
+awg-vps-control update-ui v0.1.0-rc.1
+awg-vps-control healthcheck
 ```
 
-`latest` разрешается через GitHub Releases, а не означает текущую ветку разработки. Если опубликованного выпуска нет, загрузчик сообщает ошибку. Загрузка проверяет SHA-256 архива; источником доверия остаются официальный репозиторий и HTTPS. Формат артефактов и процедура выпуска описаны в [инструкции выпуска](docs/release_guide.md).
+`latest` выбирает последний стабильный GitHub Release и не включает предварительные выпуски. Пока стабильного выпуска нет, используйте `v0.1.0-rc.1`. Загрузка проверяет SHA-256 архива; источником доверия остаются официальный репозиторий и HTTPS. Формат артефактов и процедура выпуска описаны в [инструкции выпуска](docs/release_guide.md).
 
 ### 2. Подключить AWG служебной командой
 
